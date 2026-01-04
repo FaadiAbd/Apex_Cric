@@ -6,3 +6,6 @@ venv/
 
 # Python cache
 __pycache__/
+
+# Generated output videos
+static/output_*.mp4
