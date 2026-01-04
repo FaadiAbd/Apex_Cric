@@ -3,11 +3,13 @@ import mediapipe as mp
 import numpy as np
 import requests
 import os
-
+from dotenv import load_dotenv
+load_dotenv()
 # === OpenRouter DeepSeek Setup ===
-API_KEY = "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"  # ← Replace with your actual key
-MODEL_ID = "openai/gpt-5-chat"
-
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+MODEL_ID = os.getenv("MODEL_ID")
+if not API_KEY:
+    raise RuntimeError("OPENROUTER_API_KEY not set")
 def deepseek_feedback(features):
     if not API_KEY or "sk-or-" not in API_KEY:
         print("⚠️ API key not configured.")
