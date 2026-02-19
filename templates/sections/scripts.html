@@ -1,0 +1,260 @@
+<script>
+    const loggedIn = {{ 'true' if logged_in else 'false' }};
+    // --- PAGE TRANSITIONS ---
+    setTimeout(() => {
+        document.getElementById('intro-section').classList.add('hidden');
+        if (loggedIn) document.getElementById('upload-section').classList.remove('hidden');
+        else document.getElementById('auth-section').classList.remove('hidden');
+    }, 3500);
+
+    // --- AUTH TABS (show one form at a time) ---
+    const authTabLogin = document.getElementById('auth-tab-login');
+    const authTabSignup = document.getElementById('auth-tab-signup');
+    const authPanelLogin = document.getElementById('auth-panel-login');
+    const authPanelSignup = document.getElementById('auth-panel-signup');
+    function showAuthPanel(panel) {
+        const isLogin = panel === 'login';
+        authPanelLogin.classList.toggle('hidden', !isLogin);
+        authPanelSignup.classList.toggle('hidden', isLogin);
+        authTabLogin.classList.toggle('active', isLogin);
+        authTabSignup.classList.toggle('active', !isLogin);
+    }
+    if (authTabLogin) authTabLogin.addEventListener('click', () => showAuthPanel('login'));
+    if (authTabSignup) authTabSignup.addEventListener('click', () => showAuthPanel('signup'));
+
+    // --- LOGIN / SIGNUP ---
+    const loginForm = document.getElementById('login-form');
+    const signupForm = document.getElementById('signup-form');
+    if (loginForm) loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const errEl = document.getElementById('login-error');
+        errEl.classList.add('hidden');
+        const res = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: loginForm.email.value, password: loginForm.password.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) { window.location.reload(); return; }
+        errEl.textContent = data.error || 'Login failed.'; errEl.classList.remove('hidden');
+    });
+    if (signupForm) signupForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const errEl = document.getElementById('signup-error');
+        errEl.classList.add('hidden');
+        const res = await fetch('/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: signupForm.email.value, password: signupForm.password.value, name: signupForm.name.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) { window.location.reload(); return; }
+        errEl.textContent = data.error || 'Sign up failed.'; errEl.classList.remove('hidden');
+    });
+
+    // --- HISTORY SIDE PANEL ---
+    const historyPanel = document.getElementById('history-sidepanel');
+    const historyOverlay = document.getElementById('history-overlay');
+    const historyToggle = document.getElementById('history-panel-toggle');
+    const historyClose = document.getElementById('history-panel-close');
+    const historyListEl = document.getElementById('history-list');
+    const historyLoading = document.getElementById('history-loading');
+    const historyEmpty = document.getElementById('history-empty');
+
+    function setHistoryPanelOpen(open) {
+        if (historyPanel) historyPanel.classList.toggle('open', open);
+        if (historyOverlay) historyOverlay.classList.toggle('open', open);
+    }
+    function fetchAndRenderHistory() {
+        if (!historyListEl || !historyLoading || !historyEmpty) return;
+        historyLoading.classList.remove('hidden');
+        historyListEl.classList.add('hidden');
+        historyEmpty.classList.add('hidden');
+        fetch('/api/history')
+            .then(r => r.json())
+            .then(data => {
+                historyLoading.classList.add('hidden');
+                const list = data.analyses || [];
+                if (list.length === 0) {
+                    historyEmpty.classList.remove('hidden');
+                    return;
+                }
+                historyListEl.innerHTML = list.map(a => {
+                    const dateStr = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'Unknown date';
+                    const rawLabel = a.original_filename || `Analysis ${a.id}`;
+                    const label = rawLabel.length > 35 ? rawLabel.slice(0, 32) + '...' : rawLabel;
+                    return `<li data-analysis-id="${a.id}" data-json="${encodeURIComponent(JSON.stringify(a))}">
+                        <div class="history-item-date">${dateStr}</div>
+                        <div class="history-item-label">${label}</div>
+                    </li>`;
+                }).join('');
+                historyListEl.classList.remove('hidden');
+                historyListEl.querySelectorAll('li').forEach(li => {
+                    li.addEventListener('click', () => {
+                        try {
+                            const a = JSON.parse(decodeURIComponent(li.getAttribute('data-json')));
+                            const payload = {
+                                output_video_full_url: a.output_video_full_url,
+                                output_video_skeleton_url: a.output_video_skeleton_url,
+                                release_features: a.release_features || {},
+                                ai_feedback: a.ai_feedback || '',
+                                video_dimensions: { width: a.video_width || 0, height: a.video_height || 0 },
+                                fps: a.fps || 30,
+                                frame_data: []
+                            };
+                            populateAnalysisPage(payload);
+                            document.getElementById('upload-section').classList.add('hidden');
+                            analysisSection.classList.remove('hidden');
+                            setHistoryPanelOpen(false);
+                        } catch (e) { console.error(e); }
+                    });
+                });
+            })
+            .catch(() => {
+                historyLoading.classList.add('hidden');
+                historyEmpty.classList.remove('hidden');
+                historyEmpty.textContent = 'Could not load history.';
+            });
+    }
+    if (historyToggle) historyToggle.addEventListener('click', () => {
+        setHistoryPanelOpen(!historyPanel.classList.contains('open'));
+        if (historyPanel.classList.contains('open')) fetchAndRenderHistory();
+    });
+    if (historyClose) historyClose.addEventListener('click', () => setHistoryPanelOpen(false));
+    if (historyOverlay) historyOverlay.addEventListener('click', () => setHistoryPanelOpen(false));
+
+    // --- DOM ELEMENTS & STATE ---
+    const videoUploadInput = document.getElementById('video-upload');
+    const processingModal = document.getElementById('processing-modal');
+    const analysisSection = document.getElementById('analysis-section');
+    const videoPlayer = document.getElementById('analysis-video');
+    const fullModeBtn = document.getElementById('full-mode-btn');
+    const skeletonModeBtn = document.getElementById('skeleton-mode-btn');
+    const downloadBtn = document.getElementById('download-btn');
+
+    let frameData = [];
+    let videoFPS = 30;
+    let videoUrlFull = '';
+    let videoUrlSkeleton = '';
+    let currentMode = 'full';
+
+    // --- EVENT LISTENER FOR VIDEO UPLOAD ---
+    videoUploadInput.addEventListener('change', function() {
+        if (this.files && this.files.length > 0) {
+            document.getElementById('file-name-display').textContent = this.files[0].name;
+            document.getElementById('upload-container').classList.add('hidden');
+            processingModal.classList.remove('hidden');
+
+            const formData = new FormData();
+            formData.append('video', this.files[0]);
+
+            fetch('/analyze', { method: 'POST', body: formData })
+            .then(response => {
+                if (response.status === 401) { window.location.reload(); return Promise.reject(new Error('Login required')); }
+                if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) throw new Error(data.error);
+                populateAnalysisPage(data);
+
+                document.getElementById('upload-section').classList.add('hidden');
+                processingModal.classList.add('hidden');
+                analysisSection.classList.remove('hidden');
+            })
+            .catch(error => {
+                if (error.message === 'Login required') return;
+                console.error('Error during analysis:', error);
+                alert(`An error occurred: ${error.message}. Please try again.`);
+                document.getElementById('upload-container').classList.remove('hidden');
+                processingModal.classList.add('hidden');
+            });
+        }
+    });
+
+    // --- METRICS & VIDEO HANDLING ---
+    function updateMetricsDisplay(metrics) {
+        document.getElementById('elbow-angle').textContent = metrics?.elbow_angle ? `${metrics.elbow_angle}°` : 'N/A';
+        document.getElementById('knee-angle').textContent = metrics?.front_knee_angle ? `${metrics.front_knee_angle}°` : 'N/A';
+        document.getElementById('arm-verticality').textContent = metrics?.arm_verticality ? `${metrics.arm_verticality}°` : 'N/A';
+        document.getElementById('stride-length').textContent = metrics?.stride_length ? `${metrics.stride_length}x` : 'N/A';
+    }
+
+    function updateMetricsOnTimeUpdate() {
+        const frameNumber = Math.floor(this.currentTime * videoFPS);
+        if (frameData && frameNumber >= 0 && frameNumber < frameData.length) {
+            updateMetricsDisplay(frameData[frameNumber]);
+        } else {
+            updateMetricsDisplay(null);
+        }
+    }
+
+    function switchVideoMode(mode) {
+        if (currentMode === mode && videoPlayer.src) return;
+
+        const currentTime = videoPlayer.currentTime;
+        const isPlaying = !videoPlayer.paused;
+        currentMode = mode;
+
+        const newSrc = (mode === 'full') ? videoUrlFull : videoUrlSkeleton;
+        videoPlayer.src = newSrc;
+        videoPlayer.load();
+
+        const onVideoLoaded = () => {
+            videoPlayer.currentTime = currentTime;
+            if (isPlaying) {
+                videoPlayer.play().catch(e => console.error("Autoplay prevented on switch:", e));
+            }
+        };
+        videoPlayer.addEventListener('loadeddata', onVideoLoaded, { once: true });
+
+        fullModeBtn.classList.toggle('active', mode === 'full');
+        skeletonModeBtn.classList.toggle('active', mode === 'skeleton');
+        downloadBtn.href = newSrc;
+        downloadBtn.setAttribute('download', `bowling_analysis_${mode}_${new Date().toISOString().split('T')[0]}.mp4`);
+    }
+
+    // --- PAGE POPULATION & SETUP ---
+    function populateAnalysisPage(data) {
+        frameData = data.frame_data;
+        videoFPS = data.fps;
+        videoUrlFull = data.output_video_full_url;
+        videoUrlSkeleton = data.output_video_skeleton_url;
+
+        const videoContainer = document.getElementById('analysis-video-container');
+        if (data.video_dimensions && data.video_dimensions.width > 0) {
+            videoContainer.style.aspectRatio = data.video_dimensions.width / data.video_dimensions.height;
+        } else {
+            videoContainer.style.aspectRatio = '16 / 9';
+        }
+
+        updateMetricsDisplay(data.release_features);
+        switchVideoMode('full');
+        videoPlayer.src = videoUrlFull;
+
+        const feedbackContainer = document.getElementById('ai-feedback-container');
+        feedbackContainer.innerHTML = '';
+        const tips = data.ai_feedback.split('\n').filter(tip => tip.trim().startsWith('-'));
+        if (tips.length > 0) {
+            const ul = document.createElement('ul');
+            ul.className = 'list-disc list-inside space-y-2 text-gray-200';
+            tips.forEach(tip => {
+                const li = document.createElement('li');
+                li.textContent = tip.replace(/^-/, '').trim();
+                ul.appendChild(li);
+            });
+            feedbackContainer.appendChild(ul);
+        } else {
+            feedbackContainer.innerHTML = `<p class="text-gray-300">${data.ai_feedback}</p>`;
+        }
+    }
+
+    // --- EVENT LISTENERS ---
+    videoPlayer.addEventListener('timeupdate', updateMetricsOnTimeUpdate);
+    videoPlayer.addEventListener('pause', updateMetricsOnTimeUpdate);
+    videoPlayer.addEventListener('seeked', updateMetricsOnTimeUpdate);
+
+    fullModeBtn.addEventListener('click', () => switchVideoMode('full'));
+    skeletonModeBtn.addEventListener('click', () => switchVideoMode('skeleton'));
+    document.getElementById('analyze-another-btn').addEventListener('click', function() {
+        analysisSection.classList.add('hidden');
+        document.getElementById('upload-section').classList.remove('hidden');
+        document.getElementById('upload-container').classList.remove('hidden');
+        videoUploadInput.value = '';
+        document.getElementById('file-name-display').textContent = '';
+        videoPlayer.src = '';
+        videoPlayer.load();
+    });
+</script>

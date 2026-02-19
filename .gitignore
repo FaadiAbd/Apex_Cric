@@ -9,3 +9,9 @@ __pycache__/
 
 # Generated output videos
 static/output_*.mp4
+
+# Downloaded pose model
+models/
+
+# SQLite auth DB
+apex_cric.db
