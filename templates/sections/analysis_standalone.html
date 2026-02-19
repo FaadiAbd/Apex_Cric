@@ -1,0 +1,73 @@
+<div id="analysis-section" class="screen-overlay overflow-hidden bg-gradient-to-br from-[#0d1117] to-[#101d23] flex flex-col h-full">
+    <div class="flex w-full flex-1 min-h-0">
+        {% if logged_in %}
+        <aside class="app-sidebar">
+            <div class="app-sidebar-logo">
+                <svg class="h-8 w-8 text-[var(--neon-blue)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                <h1 class="text-xl orbitron font-bold tracking-wider">BowlForm AI</h1>
+            </div>
+            <nav class="app-sidebar-nav">
+                <a href="/dashboard" class="flex items-center gap-3 w-full py-2.5 px-5 text-left text-gray-300 hover:bg-white/10 hover:text-white rounded-none border-none">
+                    <span class="material-icons text-lg">analytics</span>
+                    Analyse
+                </a>
+                <a href="/dashboard" class="flex items-center gap-3 w-full py-2.5 px-5 text-left text-gray-300 hover:bg-white/10 hover:text-white rounded-none border-none">
+                    <span class="material-icons text-lg">history</span>
+                    History
+                </a>
+            </nav>
+            <div class="app-sidebar-bottom">
+                <div class="app-sidebar-user">{{ user_name or user_email }}</div>
+                <a href="/profile" class="pill-button pill-button-secondary text-sm flex items-center justify-center gap-2 mb-2 w-full">
+                    <span class="material-icons text-lg">person</span>
+                    Edit Profile
+                </a>
+                <a href="/logout" class="pill-button text-sm flex items-center justify-center gap-2" id="logout-link">Logout</a>
+            </div>
+        </aside>
+        {% endif %}
+
+        <main class="app-main flex-1 min-h-0 flex flex-col overflow-hidden">
+            <header class="shrink-0 flex items-center justify-end px-4 py-3 border-b border-white/10">
+                <a href="/dashboard" class="pill-button text-sm flex items-center gap-2">
+                    <span class="material-icons text-lg">arrow_back</span>
+                    Back
+                </a>
+            </header>
+
+            <div class="analysis-content flex-1 min-h-0 flex flex-col lg:flex-row gap-4 p-4 overflow-hidden">
+                <aside class="analysis-tips glassmorphic-analysis rounded-xl p-4 lg:w-72 shrink-0 flex flex-col min-h-0">
+                    <h2 class="orbitron text-lg font-bold mb-3 text-[var(--neon-blue)] shrink-0">AI COACHING TIPS</h2>
+                    <div id="ai-feedback-container" class="space-y-2 text-sm text-gray-200 overflow-y-auto min-h-0"></div>
+                </aside>
+
+                <div class="analysis-video-col flex-1 min-w-0 flex flex-col min-h-0">
+                    <div id="analysis-video-container" class="flex-1 min-h-0 bg-black rounded-xl overflow-hidden shadow-lg shadow-[var(--neon-blue)]/20 flex items-center justify-center">
+                        <video class="w-full h-full object-contain" controls loop id="analysis-video">
+                            Your browser does not support the video tag.
+                        </video>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-center gap-2 py-3 shrink-0">
+                        <button id="full-mode-btn" class="pill-button active text-sm">Full Mode</button>
+                        <button id="skeleton-mode-btn" class="pill-button text-sm">Skeleton Mode</button>
+                        <a id="download-btn" class="pill-button text-sm flex items-center justify-center gap-2 cursor-pointer">
+                            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg>
+                            Download
+                        </a>
+                    </div>
+                </div>
+
+                <aside class="analysis-metrics glassmorphic-analysis rounded-xl p-4 lg:w-64 shrink-0 flex flex-col min-h-0">
+                    <h2 class="orbitron text-lg font-bold mb-3 text-[var(--neon-blue)] shrink-0">REAL-TIME METRICS</h2>
+                    <div id="metrics-container" class="space-y-3 shrink-0">
+                        <div class="flex justify-between items-center"><span class="font-semibold text-gray-300 text-sm">Elbow Angle</span><span class="orbitron font-bold text-xl text-white" id="elbow-angle">...</span></div>
+                        <div class="flex justify-between items-center"><span class="font-semibold text-gray-300 text-sm">Front Knee Angle</span><span class="orbitron font-bold text-xl text-white" id="knee-angle">...</span></div>
+                        <div class="flex justify-between items-center"><span class="font-semibold text-gray-300 text-sm">Arm Verticality</span><span class="orbitron font-bold text-xl text-white" id="arm-verticality">...</span></div>
+                        <div class="flex justify-between items-center"><span class="font-semibold text-gray-300 text-sm">Stride Length</span><span class="orbitron font-bold text-xl text-white" id="stride-length">...</span></div>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-3 text-center italic shrink-0">Metrics update as video plays or is paused.</p>
+                </aside>
+            </div>
+        </main>
+    </div>
+</div>

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "sections/analysis_standalone.html" %}
+{% endblock %}
+{% block scripts %}
+<script>
+    window.__ANALYSIS_PAYLOAD__ = {
+        output_video_full_url: {{ analysis.output_video_full_url|tojson }},
+        output_video_skeleton_url: {{ analysis.output_video_skeleton_url|tojson }},
+        release_features: {{ (analysis.release_features or {})|tojson }},
+        ai_feedback: {{ (analysis.ai_feedback or '')|tojson }},
+        video_dimensions: { width: {{ analysis.video_width or 0 }}, height: {{ analysis.video_height or 0 }} },
+        fps: {{ analysis.fps or 30 }},
+        frame_data: {{ (analysis.frame_data or [])|tojson }}
+    };
+</script>
+{% include "sections/scripts_analysis_page.html" %}
+{% endblock %}

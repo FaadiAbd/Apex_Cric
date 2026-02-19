@@ -1,12 +1,22 @@
 import cv2
-import mediapipe as mp
+import json
 import numpy as np
 import requests
 import os
 import uuid
-from flask import Flask, request, jsonify, render_template_string, url_for
+import sqlite3
+import secrets
+from flask import Flask, request, jsonify, render_template, url_for, redirect, session
+from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
+from functools import wraps
 load_dotenv()
+
+# MediaPipe Tasks API (pose_landmarker)
+from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions, PoseLandmarksConnections
+from mediapipe.tasks.python.vision.core.vision_task_running_mode import VisionTaskRunningMode
+from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
+from mediapipe.tasks.python.core import base_options as base_options_lib
 # ==============================================================================
 # 1. FLASK APPLICATION SETUP
 # ==============================================================================
@@ -25,6 +35,303 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(STATIC_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['STATIC_FOLDER'] = STATIC_FOLDER
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24).hex())
+DATABASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apex_cric.db')
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
+POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task'
+POSE_MODEL_PATH = os.path.join(MODEL_DIR, 'pose_landmarker_heavy.task')
+
+
+# ==============================================================================
+# AUTH: SQLite user store and helpers
+# ==============================================================================
+
+def get_db():
+    """Get a SQLite connection with row factory."""
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Create users and analyses tables if they do not exist."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS analyses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                original_filename TEXT,
+                output_full_filename TEXT NOT NULL,
+                output_skeleton_filename TEXT NOT NULL,
+                release_features TEXT,
+                ai_feedback TEXT,
+                video_width INTEGER,
+                video_height INTEGER,
+                fps REAL
+            )
+        """)
+        try:
+            conn.execute("ALTER TABLE analyses ADD COLUMN frame_data TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS auth_tokens (
+                user_id INTEGER NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                token TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+
+
+def get_user_by_email(email):
+    """Return user row (dict-like) or None."""
+    with get_db() as conn:
+        row = conn.execute("SELECT id, email, password_hash, name FROM users WHERE email = ?", (email.strip().lower(),)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id):
+    """Return user row or None."""
+    with get_db() as conn:
+        row = conn.execute("SELECT id, email, name FROM users WHERE id = ?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def create_auth_token(user_id):
+    """Create or replace a long-lived auth token for the user. Returns the token string."""
+    token = secrets.token_urlsafe(32)
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO auth_tokens (user_id, token) VALUES (?, ?)",
+            (user_id, token),
+        )
+        conn.commit()
+    return token
+
+
+def lookup_user_by_token(token):
+    """Return user_id for a valid token, else None."""
+    if not token or not isinstance(token, str):
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM auth_tokens WHERE token = ?",
+            (token.strip(),),
+        ).fetchone()
+    return row["user_id"] if row else None
+
+
+def create_user(email, password, name=None):
+    """Create user. Returns (user_dict, None) or (None, error_message)."""
+    email = email.strip().lower()
+    if not email or not password:
+        return None, "Email and password are required."
+    if len(password) < 6:
+        return None, "Password must be at least 6 characters."
+    if get_user_by_email(email):
+        return None, "An account with this email already exists."
+    password_hash = generate_password_hash(password, method="scrypt")
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+            (email, password_hash, (name or "").strip() or None),
+        )
+        conn.commit()
+        user_id = cur.lastrowid
+    return get_user_by_id(user_id), None
+
+
+def get_user_by_id_with_password(user_id):
+    """Return user row including password_hash, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, email, password_hash, name FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_user(user_id, name=None, email=None, new_password=None, current_password=None):
+    """Update user profile. Returns (user_dict, None) or (None, error_message)."""
+    user = get_user_by_id_with_password(user_id)
+    if not user:
+        return None, "User not found."
+    if new_password:
+        if not current_password:
+            return None, "Current password is required to set a new password."
+        if not check_password_hash(user["password_hash"], current_password):
+            return None, "Current password is incorrect."
+        if len(new_password) < 6:
+            return None, "New password must be at least 6 characters."
+    updates = []
+    params = []
+    if name is not None:
+        updates.append("name = ?")
+        params.append((name or "").strip() or None)
+    if email is not None:
+        email = email.strip().lower()
+        if not email:
+            return None, "Email cannot be empty."
+        other = get_user_by_email(email)
+        if other and other["id"] != user_id:
+            return None, "An account with this email already exists."
+        updates.append("email = ?")
+        params.append(email)
+    if new_password:
+        updates.append("password_hash = ?")
+        params.append(generate_password_hash(new_password, method="scrypt"))
+    if not updates:
+        return get_user_by_id(user_id), None
+    params.append(user_id)
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE id = ?",
+            tuple(params),
+        )
+        conn.commit()
+    return get_user_by_id(user_id), None
+
+
+def save_analysis(user_id, original_filename, output_full_filename, output_skeleton_filename,
+                  release_features, ai_feedback, video_width, video_height, fps, frame_data=None):
+    """Save an analysis record for the user. Returns the new analysis id."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO analyses (user_id, original_filename, output_full_filename, output_skeleton_filename,
+               release_features, ai_feedback, video_width, video_height, fps, frame_data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                user_id,
+                original_filename or None,
+                output_full_filename,
+                output_skeleton_filename,
+                json.dumps(release_features) if release_features else None,
+                ai_feedback or None,
+                video_width,
+                video_height,
+                fps,
+                json.dumps(frame_data) if frame_data else None,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_user_analyses(user_id, limit=50):
+    """Return list of analysis records for the user, newest first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, created_at, original_filename, output_full_filename, output_skeleton_filename,
+                      release_features, ai_feedback, video_width, video_height, fps, frame_data
+               FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    out = []
+    for r in rows:
+        rec = dict(r)
+        if rec.get("release_features"):
+            try:
+                rec["release_features"] = json.loads(rec["release_features"])
+            except Exception:
+                rec["release_features"] = {}
+        if rec.get("frame_data") is not None:
+            try:
+                rec["frame_data"] = json.loads(rec["frame_data"]) if rec["frame_data"] else []
+            except Exception:
+                rec["frame_data"] = []
+        else:
+            rec["frame_data"] = []
+        rec["created_at"] = rec["created_at"] or ""
+        out.append(rec)
+    return out
+
+
+def get_analysis_by_id(analysis_id, user_id):
+    """Return one analysis record if it exists and belongs to the user, else None."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, created_at, original_filename, output_full_filename, output_skeleton_filename,
+                      release_features, ai_feedback, video_width, video_height, fps, frame_data
+               FROM analyses WHERE id = ? AND user_id = ?""",
+            (analysis_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    rec = dict(row)
+    if rec.get("release_features"):
+        try:
+            rec["release_features"] = json.loads(rec["release_features"])
+        except Exception:
+            rec["release_features"] = {}
+    if rec.get("frame_data") is not None:
+        try:
+            rec["frame_data"] = json.loads(rec["frame_data"]) if rec["frame_data"] else []
+        except Exception:
+            rec["frame_data"] = []
+    else:
+        rec["frame_data"] = []
+    return rec
+
+
+def login_required(f):
+    """Decorator: require session user. Returns 401 JSON for API-style requests, redirect for GET."""
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            if request.method == "POST" or request.path.startswith("/api"):
+                return jsonify({"error": "Please log in to continue.", "login_required": True}), 401
+            return redirect(url_for("login_page"))
+        return f(*args, **kwargs)
+    return wrapped
+
+
+init_db()
+
+
+def _ensure_pose_model():
+    """Download pose landmarker model if not present."""
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    if not os.path.isfile(POSE_MODEL_PATH):
+        print("Downloading pose_landmarker model...")
+        r = requests.get(POSE_MODEL_URL, timeout=60)
+        r.raise_for_status()
+        with open(POSE_MODEL_PATH, 'wb') as f:
+            f.write(r.content)
+        print("Model downloaded.")
+    return POSE_MODEL_PATH
+
+
+def _create_pose_landmarker():
+    """Create PoseLandmarker (video mode) for processing frames."""
+    model_path = _ensure_pose_model()
+    base_options = base_options_lib.BaseOptions(model_asset_path=model_path)
+    options = PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=VisionTaskRunningMode.VIDEO,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+        num_poses=1,
+    )
+    return PoseLandmarker.create_from_options(options)
+
+
+# Pose landmark indices (MediaPipe standard)
+_LANDMARK_LEFT_SHOULDER, _LANDMARK_RIGHT_SHOULDER = 11, 12
+_LANDMARK_LEFT_ELBOW, _LANDMARK_LEFT_WRIST = 13, 15
+_LANDMARK_LEFT_HIP, _LANDMARK_RIGHT_HIP = 23, 24
+_LANDMARK_LEFT_KNEE, _LANDMARK_LEFT_ANKLE, _LANDMARK_RIGHT_ANKLE = 25, 27, 28
 
 
 # ==============================================================================
@@ -85,11 +392,6 @@ Format the output as a simple list. Example:
         return f"Could not get AI feedback. {error_message}"
 
 
-# === MediaPipe Pose Setup ===
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5, model_complexity=2)
-mp_drawing = mp.solutions.drawing_utils
-
 def calculate_3d_angle(a, b, c):
     """Calculates the angle between three 3D points."""
     a, b, c = np.array(a), np.array(b), np.array(c)
@@ -99,28 +401,41 @@ def calculate_3d_angle(a, b, c):
     angle = np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
     return angle
 
-def extract_3d(part, lm):
-    """Extracts 3D coordinates and visibility for a given body part."""
-    p = lm[mp_pose.PoseLandmark[part].value]
-    return [p.x, p.y, p.z], p.visibility
 
-def extract_features(landmarks):
-    """Extracts key biomechanical features from pose landmarks."""
+def _visibility(lm):
+    """Get visibility score for a NormalizedLandmark (Tasks API)."""
+    v = getattr(lm, 'visibility', None)
+    if v is not None:
+        return v
+    return getattr(lm, 'presence', 1.0) or 1.0
+
+
+def extract_features(landmarks_list):
+    """Extracts key biomechanical features from pose landmarks (Tasks API: list of NormalizedLandmark)."""
     try:
-        ls, vs1 = extract_3d('LEFT_SHOULDER', landmarks)
-        le, vs2 = extract_3d('LEFT_ELBOW', landmarks)
-        lw, vs3 = extract_3d('LEFT_WRIST', landmarks)
-        lh, vs4 = extract_3d('LEFT_HIP', landmarks)
-        lk, _   = extract_3d('LEFT_KNEE', landmarks)
-        la, vs5 = extract_3d('LEFT_ANKLE', landmarks)
-        ra, vs6 = extract_3d('RIGHT_ANKLE', landmarks)
-        rs, _   = extract_3d('RIGHT_SHOULDER', landmarks)
+        if len(landmarks_list) < 33:
+            return None
+        ls = [landmarks_list[_LANDMARK_LEFT_SHOULDER].x, landmarks_list[_LANDMARK_LEFT_SHOULDER].y, landmarks_list[_LANDMARK_LEFT_SHOULDER].z]
+        le = [landmarks_list[_LANDMARK_LEFT_ELBOW].x, landmarks_list[_LANDMARK_LEFT_ELBOW].y, landmarks_list[_LANDMARK_LEFT_ELBOW].z]
+        lw = [landmarks_list[_LANDMARK_LEFT_WRIST].x, landmarks_list[_LANDMARK_LEFT_WRIST].y, landmarks_list[_LANDMARK_LEFT_WRIST].z]
+        lh = [landmarks_list[_LANDMARK_LEFT_HIP].x, landmarks_list[_LANDMARK_LEFT_HIP].y, landmarks_list[_LANDMARK_LEFT_HIP].z]
+        lk = [landmarks_list[_LANDMARK_LEFT_KNEE].x, landmarks_list[_LANDMARK_LEFT_KNEE].y, landmarks_list[_LANDMARK_LEFT_KNEE].z]
+        la = [landmarks_list[_LANDMARK_LEFT_ANKLE].x, landmarks_list[_LANDMARK_LEFT_ANKLE].y, landmarks_list[_LANDMARK_LEFT_ANKLE].z]
+        ra = [landmarks_list[_LANDMARK_RIGHT_ANKLE].x, landmarks_list[_LANDMARK_RIGHT_ANKLE].y, landmarks_list[_LANDMARK_RIGHT_ANKLE].z]
+        rs = [landmarks_list[_LANDMARK_RIGHT_SHOULDER].x, landmarks_list[_LANDMARK_RIGHT_SHOULDER].y, landmarks_list[_LANDMARK_RIGHT_SHOULDER].z]
 
-        if min(vs1, vs2, vs3, vs4, vs5, vs6) < 0.6:
+        vs = [
+            _visibility(landmarks_list[_LANDMARK_LEFT_SHOULDER]),
+            _visibility(landmarks_list[_LANDMARK_LEFT_ELBOW]),
+            _visibility(landmarks_list[_LANDMARK_LEFT_WRIST]),
+            _visibility(landmarks_list[_LANDMARK_LEFT_HIP]),
+            _visibility(landmarks_list[_LANDMARK_LEFT_ANKLE]),
+            _visibility(landmarks_list[_LANDMARK_RIGHT_ANKLE]),
+        ]
+        if min(vs) < 0.6:
             return None
 
         shoulder_width = np.linalg.norm(np.array(ls) - np.array(rs))
-        
         return {
             "elbow_angle": round(calculate_3d_angle(ls, le, lw), 1),
             "shoulder_angle": round(calculate_3d_angle(lh, ls, le), 1),
@@ -130,6 +445,25 @@ def extract_features(landmarks):
         }
     except Exception:
         return None
+
+
+def _draw_landmarks_on_frame(frame, landmarks_list, h, w, features=None):
+    """Draw pose skeleton on frame from list of NormalizedLandmark (normalized 0-1)."""
+    if not landmarks_list or len(landmarks_list) < 33:
+        return
+    pts = []
+    for lm in landmarks_list:
+        x = int(lm.x * w)
+        y = int(lm.y * h)
+        pts.append((x, y))
+    for conn in PoseLandmarksConnections.POSE_LANDMARKS:
+        i, j = conn.start, conn.end
+        if i < len(pts) and j < len(pts):
+            cv2.line(frame, pts[i], pts[j], (25, 250, 170), 2)
+    for (x, y) in pts:
+        cv2.circle(frame, (x, y), 2, (255, 255, 255), -1)
+    if features:
+        draw_info_box(frame, features)
 
 def draw_info_box(frame, features):
     """Draws the feedback box with release metrics on the video frame."""
@@ -161,61 +495,70 @@ def analyze_bowling_pose(video_path):
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps == 0:
         fps = 30
+    frame_duration_ms = int(1000.0 / fps)
+
+    pose_landmarker = _create_pose_landmarker()
 
     # Pass 1: Extract data from all frames and find release point
     all_frame_features = []
     release_frame_features = None
     max_elbow_angle = 0
+    timestamp_ms = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret: break
-        
+        if not ret:
+            break
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
+        if not rgb.flags['C_CONTIGUOUS']:
+            rgb = np.ascontiguousarray(rgb)
+        mp_image = Image(ImageFormat.SRGB, rgb)
+        result = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
+        timestamp_ms += frame_duration_ms
 
         frame_features = None
-        if result.pose_landmarks:
-            frame_features = extract_features(result.pose_landmarks.landmark)
+        if result.pose_landmarks and len(result.pose_landmarks) > 0:
+            frame_features = extract_features(result.pose_landmarks[0])
             if frame_features and frame_features.get('elbow_angle', 0) > max_elbow_angle:
                 max_elbow_angle = frame_features['elbow_angle']
                 release_frame_features = frame_features
         all_frame_features.append(frame_features)
-    
+
     ai_feedback = "No suitable pose detected for analysis."
     if release_frame_features:
         ai_feedback = deepseek_feedback(release_frame_features)
 
-    # Pass 2: Generate both Full and Skeleton videos
+    pose_landmarker.close()
+
+    # Pass 2: Generate both Full and Skeleton videos (new landmarker so timestamps can start at 0)
+    pose_landmarker_2 = _create_pose_landmarker()
     uid = uuid.uuid4().hex
     output_full_filename = f"output_full_{uid}.mp4"
     output_skeleton_filename = f"output_skeleton_{uid}.mp4"
     output_full_path = os.path.join(app.config['STATIC_FOLDER'], output_full_filename)
     output_skeleton_path = os.path.join(app.config['STATIC_FOLDER'], output_skeleton_filename)
-    
+
     writer_full = cv2.VideoWriter(output_full_path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
     writer_skeleton = cv2.VideoWriter(output_skeleton_path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    timestamp_ms = 0
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret: break
-        
+        if not ret:
+            break
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
-        
-        black_frame = np.zeros_like(frame)
+        if not rgb.flags['C_CONTIGUOUS']:
+            rgb = np.ascontiguousarray(rgb)
+        mp_image = Image(ImageFormat.SRGB, rgb)
+        result = pose_landmarker_2.detect_for_video(mp_image, timestamp_ms)
+        timestamp_ms += frame_duration_ms
 
-        if result.pose_landmarks:
-            landmark_spec = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2)
-            connection_spec = mp_drawing.DrawingSpec(color=(25, 250, 170), thickness=2, circle_radius=2)
-            
-            mp_drawing.draw_landmarks(frame, result.pose_landmarks, mp_pose.POSE_CONNECTIONS, landmark_spec, connection_spec)
-            mp_drawing.draw_landmarks(black_frame, result.pose_landmarks, mp_pose.POSE_CONNECTIONS, landmark_spec, connection_spec)
-            
-            if release_frame_features:
-                draw_info_box(frame, release_frame_features)
-                draw_info_box(black_frame, release_frame_features)
+        black_frame = np.zeros_like(frame)
+        if result.pose_landmarks and len(result.pose_landmarks) > 0:
+            lm_list = result.pose_landmarks[0]
+            _draw_landmarks_on_frame(frame, lm_list, h, w, release_frame_features)
+            _draw_landmarks_on_frame(black_frame, lm_list, h, w, release_frame_features)
 
         writer_full.write(frame)
         writer_skeleton.write(black_frame)
@@ -223,12 +566,15 @@ def analyze_bowling_pose(video_path):
     cap.release()
     writer_full.release()
     writer_skeleton.release()
-    
-    print(f"Analysis complete! Outputs generated.")
+    pose_landmarker_2.close()
+
+    print("Analysis complete! Outputs generated.")
 
     return {
         "output_video_full_url": url_for('static', filename=output_full_filename, _external=True),
         "output_video_skeleton_url": url_for('static', filename=output_skeleton_filename, _external=True),
+        "output_full_filename": output_full_filename,
+        "output_skeleton_filename": output_skeleton_filename,
         "release_features": release_frame_features if release_frame_features else {},
         "frame_data": all_frame_features,
         "ai_feedback": ai_feedback,
@@ -237,376 +583,170 @@ def analyze_bowling_pose(video_path):
     }
 
 # ==============================================================================
-# 3. FRONTEND: HTML, CSS, JAVASCRIPT
-# ==============================================================================
-
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>BowlForm AI</title>
-<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<link href="https://fonts.googleapis.com" rel="preconnect"/>
-<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@800&family=Montserrat:wght@300;400;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
-<style type="text/tailwindcss">
-    @keyframes float {
-        0% { transform: translateY(0px); }
-        50% { transform: translateY(-10px); }
-        100% { transform: translateY(0); }
-    }
-    @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(25,250,170,0.4);}
-        70% { box-shadow: 0 0 0 20px rgba(25,250,170,0);}
-        100% { box-shadow: 0 0 0 0 rgba(25,250,170,0);}
-    }
-    .animate-float { animation: float 6s ease-in-out infinite; }
-    .animate-pulse-glow { animation: pulse 2s infinite; }
-    .font-orbitron { font-family: 'Orbitron', sans-serif; }
-    .font-montserrat { font-family: 'Montserrat', sans-serif; }
-    .fade-out {
-        animation: fadeOut 1s ease-in-out forwards;
-        animation-delay: 2.5s;
-    }
-    @keyframes fadeOut {
-        from { opacity: 1; }
-        to { opacity: 0; visibility: hidden; }
-    }
-    .particle {
-        position: absolute;
-        border-radius: 50%;
-        background: rgba(255,255,255,0.1);
-        animation: rise 10s infinite linear;
-    }
-    @keyframes rise {
-        from { transform: translateY(100vh) scale(0); opacity: 1; }
-        to { transform: translateY(-10vh) scale(1); opacity: 0; }
-    }
-    :root {
-        --brand-glow: #19faaa;
-        --neon-blue: #0ea8f0;
-    }
-    .glassmorphic {
-        backdrop-filter: blur(12px);
-        background: rgba(255,255,255,0.05);
-        border-radius: 16px;
-        border: 1px solid rgba(25,250,170,0.2);
-        box-shadow: 0 0 20px rgba(25,250,170,0.1);
-    }
-    .upload-button-glow {
-        box-shadow: 0 0 15px 5px rgba(25,250,170,0.3), 0 0 30px 10px rgba(25,250,170,0.1);
-    }
-    .upload-button-glow:hover {
-        box-shadow: 0 0 20px 7px rgba(25,250,170,0.5), 0 0 40px 15px rgba(25,250,170,0.2);
-    }
-    .loader {
-        border: 4px solid rgba(255,255,255,0.2);
-        border-left-color: var(--brand-glow);
-        border-radius: 50%;
-        width: 50px;
-        height: 50px;
-        animation: spin 1s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    body {
-        background-color: #0d1117;
-        font-family: 'Montserrat', 'Space Grotesk', sans-serif;
-    }
-    .orbitron { font-family: 'Orbitron', sans-serif; }
-    .glassmorphic-analysis {
-        background: rgba(22, 29, 39, 0.6);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-    .pill-button {
-        @apply px-4 py-2 rounded-full text-white font-bold transition-all duration-300 whitespace-nowrap;
-        background: rgba(14,168,240,0.2);
-        border: 1px solid var(--neon-blue);
-        box-shadow: 0 0 10px rgba(14,168,240,0.4);
-    }
-    .pill-button:hover {
-        background: rgba(14,168,240,0.5);
-        box-shadow: 0 0 15px rgba(14,168,240,0.6);
-    }
-    .pill-button.active {
-        background: var(--neon-blue);
-        box-shadow: 0 0 15px rgba(14,168,240,0.6);
-    }
-    /* Custom scrollbar */
-    ::-webkit-scrollbar { width: 8px; }
-    ::-webkit-scrollbar-track { background: #0d1117; }
-    ::-webkit-scrollbar-thumb { background: var(--neon-blue); border-radius: 4px;}
-    ::-webkit-scrollbar-thumb:hover { background: #19faaa; }
-</style>
-</head>
-<body class="bg-gradient-to-br from-[#0d0d26] to-[#103c3c] text-white">
-
-<div id="intro-section" class="relative w-screen h-screen overflow-hidden z-50">
-    <div class="absolute top-0 left-0 w-full h-full pointer-events-none">
-        <div class="particle" style="width: 2px; height: 2px; left: 10%; animation-duration: 12s; animation-delay: 0s;"></div>
-        <div class="particle" style="width: 3px; height: 3px; left: 20%; animation-duration: 7s; animation-delay: 1s;"></div>
-    </div>
-    <div class="fade-out flex flex-col items-center justify-center h-full text-center">
-        <div class="animate-float">
-            <div class="relative w-48 h-48 md:w-56 md:h-56 animate-pulse-glow rounded-full flex items-center justify-center bg-black/20">
-                <svg class="h-24 w-24 text-[var(--brand-glow)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-            </div>
-        </div>
-        <h1 class="font-orbitron text-white text-[42px] md:text-[56px] font-extrabold mt-8 tracking-wider">BowlForm AI</h1>
-        <p class="font-montserrat text-gray-300 text-[18px] md:text-[22px] font-light mt-2 tracking-wider">Refine. Review. Rise.</p>
-    </div>
-</div>
-
-<div id="upload-section" class="relative min-h-screen w-full overflow-hidden hidden">
-    <div class="absolute inset-0 bg-cover bg-center" style="background-image: url('https://images.unsplash.com/photo-1595392490148-d75073809623?q=80&w=2070&auto=format&fit=crop');"></div>
-    <div class="absolute inset-0 bg-gray-900/70 backdrop-blur-sm"></div>
-    <div class="relative z-10 flex min-h-screen w-full items-center justify-center p-4" id="upload-container">
-        <div class="w-full max-w-lg">
-            <div class="glassmorphic p-6 md:p-8">
-                <div class="text-center mb-8">
-                    <h1 class="text-3xl md:text-4xl orbitron font-bold text-white tracking-wide">Bowling Analysis</h1>
-                    <p class="text-gray-300 mt-2">Get instant AI feedback on your action.</p>
-                </div>
-                <form class="space-y-6" id="analysis-form">
-                    <div class="text-center pt-4">
-                        <label class="cursor-pointer group" for="video-upload">
-                            <div class="w-40 h-40 mx-auto border-2 border-dashed border-gray-500 rounded-full flex flex-col items-center justify-center transition-all duration-300 hover:border-[var(--brand-glow)] hover:bg-white/5 upload-button-glow">
-                                <span class="material-icons text-5xl text-gray-400 group-hover:text-[var(--brand-glow)] transition-colors">upload</span>
-                                <span class="mt-2 text-sm font-semibold text-white">Upload Video</span>
-                            </div>
-                        </label>
-                        <input accept=".mp4,.mov,.avi" class="hidden" id="video-upload" type="file"/>
-                        <p id="file-name-display" class="text-sm text-[var(--brand-glow)] mt-4 h-5"></p>
-                        <p class="text-xs text-gray-400 mt-2">Use a clear side-view video for best results.</p>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-    <div class="hidden fixed inset-0 z-50 bg-gray-900/80 backdrop-blur-md flex items-center justify-center" id="processing-modal">
-        <div class="text-center">
-            <div class="loader mx-auto"></div>
-            <h2 class="text-2xl font-bold mt-6 text-white orbitron">Analyzing your action...</h2>
-            <p class="text-gray-300 mt-2">This may take a minute. Please wait.</p>
-        </div>
-    </div>
-</div>
-
-<div id="analysis-section" class="min-h-screen flex-col items-center justify-center p-4 lg:p-8 bg-gradient-to-br from-[#0d1117] to-[#101d23] hidden">
-    <header class="w-full max-w-7xl mx-auto mb-6">
-        <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-                <svg class="h-8 w-8 text-[var(--neon-blue)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                <h1 class="text-2xl orbitron font-bold tracking-wider">BowlForm AI</h1>
-            </div>
-            <button class="pill-button" id="analyze-another-btn">Analyze Another</button>
-        </div>
-    </header>
-    <main class="w-full flex flex-col lg:flex-row items-start justify-center gap-8 max-w-7xl mx-auto">
-        <aside class="w-full lg:w-1/4 glassmorphic-analysis rounded-2xl p-6 order-2 lg:order-1">
-            <h2 class="orbitron text-xl font-bold mb-4 text-[var(--neon-blue)]">AI COACHING TIPS</h2>
-            <div id="ai-feedback-container" class="space-y-3"></div>
-        </aside>
-        
-        <div class="w-full lg:w-1/2 flex flex-col items-center order-1 lg:order-2">
-            <div id="analysis-video-container" class="w-full bg-black rounded-2xl overflow-hidden shadow-2xl shadow-[var(--neon-blue)]/20">
-                <video class="w-full h-full object-contain" controls loop id="analysis-video">
-                    Your browser does not support the video tag.
-                </video>
-            </div>
-            <div class="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-4 mt-8 w-full">
-                <button id="full-mode-btn" class="pill-button active w-full sm:w-auto">Full Mode</button>
-                <button id="skeleton-mode-btn" class="pill-button w-full sm:w-auto">Skeleton Mode</button>
-                <a id="download-btn" class="pill-button w-full sm:w-auto flex items-center justify-center gap-2 cursor-pointer">
-                    <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg>
-                    Download
-                </a>
-            </div>
-        </div>
-        
-        <aside class="w-full lg:w-1/4 glassmorphic-analysis rounded-2xl p-6 order-3">
-            <h2 class="orbitron text-xl font-bold mb-4 text-[var(--neon-blue)]">REAL-TIME METRICS</h2>
-            <div id="metrics-container" class="space-y-4">
-                <div class="flex justify-between items-center"><span class="font-semibold text-gray-300">Elbow Angle</span><span class="orbitron font-bold text-2xl text-white" id="elbow-angle">...</span></div>
-                <div class="flex justify-between items-center pt-2"><span class="font-semibold text-gray-300">Front Knee Angle</span><span class="orbitron font-bold text-2xl text-white" id="knee-angle">...</span></div>
-                <div class="flex justify-between items-center pt-2"><span class="font-semibold text-gray-300">Arm Verticality</span><span class="orbitron font-bold text-2xl text-white" id="arm-verticality">...</span></div>
-                <div class="flex justify-between items-center pt-2"><span class="font-semibold text-gray-300">Stride Length</span><span class="orbitron font-bold text-2xl text-white" id="stride-length">...</span></div>
-            </div>
-            <p class="text-xs text-gray-500 mt-6 text-center italic">Metrics update as video plays or is paused.</p>
-        </aside>
-    </main>
-</div>
-
-<script>
-    // --- PAGE TRANSITIONS ---
-    setTimeout(() => {
-        document.getElementById('intro-section')?.style.setProperty('display', 'none', 'important');
-        document.getElementById('upload-section')?.classList.remove('hidden');
-    }, 3500);
-
-    // --- DOM ELEMENTS & STATE ---
-    const videoUploadInput = document.getElementById('video-upload');
-    const processingModal = document.getElementById('processing-modal');
-    const analysisSection = document.getElementById('analysis-section');
-    const videoPlayer = document.getElementById('analysis-video');
-    const fullModeBtn = document.getElementById('full-mode-btn');
-    const skeletonModeBtn = document.getElementById('skeleton-mode-btn');
-    const downloadBtn = document.getElementById('download-btn');
-
-    let frameData = [];
-    let videoFPS = 30;
-    let videoUrlFull = '';
-    let videoUrlSkeleton = '';
-    let currentMode = 'full';
-
-    // --- EVENT LISTENER FOR VIDEO UPLOAD ---
-    videoUploadInput.addEventListener('change', function() {
-        if (this.files && this.files.length > 0) {
-            document.getElementById('file-name-display').textContent = this.files[0].name;
-            document.getElementById('upload-container').classList.add('hidden');
-            processingModal.classList.remove('hidden');
-
-            const formData = new FormData();
-            formData.append('video', this.files[0]);
-
-            fetch('/analyze', { method: 'POST', body: formData })
-            .then(response => {
-                if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
-                return response.json();
-            })
-            .then(data => {
-                if (data.error) throw new Error(data.error);
-                populateAnalysisPage(data);
-                
-                document.getElementById('upload-section').classList.add('hidden');
-                processingModal.classList.add('hidden');
-                analysisSection.style.display = 'flex';
-            })
-            .catch(error => {
-                console.error('Error during analysis:', error);
-                alert(`An error occurred: ${error.message}. Please try again.`);
-                document.getElementById('upload-container').classList.remove('hidden');
-                processingModal.classList.add('hidden');
-            });
-        }
-    });
-    
-    // --- METRICS & VIDEO HANDLING ---
-    function updateMetricsDisplay(metrics) {
-        document.getElementById('elbow-angle').textContent = metrics?.elbow_angle ? `${metrics.elbow_angle}°` : 'N/A';
-        document.getElementById('knee-angle').textContent = metrics?.front_knee_angle ? `${metrics.front_knee_angle}°` : 'N/A';
-        document.getElementById('arm-verticality').textContent = metrics?.arm_verticality ? `${metrics.arm_verticality}°` : 'N/A';
-        document.getElementById('stride-length').textContent = metrics?.stride_length ? `${metrics.stride_length}x` : 'N/A';
-    }
-    
-    function updateMetricsOnTimeUpdate() {
-        const frameNumber = Math.floor(this.currentTime * videoFPS);
-        if (frameData && frameNumber >= 0 && frameNumber < frameData.length) {
-            updateMetricsDisplay(frameData[frameNumber]);
-        } else {
-            updateMetricsDisplay(null);
-        }
-    }
-
-    function switchVideoMode(mode) {
-        if (currentMode === mode && videoPlayer.src) return;
-
-        const currentTime = videoPlayer.currentTime;
-        const isPlaying = !videoPlayer.paused;
-        currentMode = mode;
-        
-        const newSrc = (mode === 'full') ? videoUrlFull : videoUrlSkeleton;
-        videoPlayer.src = newSrc;
-        videoPlayer.load();
-
-        const onVideoLoaded = () => {
-            videoPlayer.currentTime = currentTime;
-            if (isPlaying) {
-                videoPlayer.play().catch(e => console.error("Autoplay prevented on switch:", e));
-            }
-        };
-        videoPlayer.addEventListener('loadeddata', onVideoLoaded, { once: true });
-        
-        fullModeBtn.classList.toggle('active', mode === 'full');
-        skeletonModeBtn.classList.toggle('active', mode === 'skeleton');
-        downloadBtn.href = newSrc;
-        downloadBtn.setAttribute('download', `bowling_analysis_${mode}_${new Date().toISOString().split('T')[0]}.mp4`);
-    }
-
-    // --- PAGE POPULATION & SETUP ---
-    function populateAnalysisPage(data) {
-        frameData = data.frame_data;
-        videoFPS = data.fps;
-        videoUrlFull = data.output_video_full_url;
-        videoUrlSkeleton = data.output_video_skeleton_url;
-
-        const videoContainer = document.getElementById('analysis-video-container');
-        if (data.video_dimensions && data.video_dimensions.width > 0) {
-            videoContainer.style.aspectRatio = data.video_dimensions.width / data.video_dimensions.height;
-        } else {
-            videoContainer.style.aspectRatio = '16 / 9';
-        }
-
-        updateMetricsDisplay(data.release_features);
-        switchVideoMode('full');
-        videoPlayer.src = videoUrlFull;
-
-        const feedbackContainer = document.getElementById('ai-feedback-container');
-        feedbackContainer.innerHTML = '';
-        const tips = data.ai_feedback.split('\\n').filter(tip => tip.trim().startsWith('-'));
-        if (tips.length > 0) {
-            const ul = document.createElement('ul');
-            ul.className = 'list-disc list-inside space-y-2 text-gray-200';
-            tips.forEach(tip => {
-                const li = document.createElement('li');
-                li.textContent = tip.replace(/^-/, '').trim();
-                ul.appendChild(li);
-            });
-            feedbackContainer.appendChild(ul);
-        } else {
-            feedbackContainer.innerHTML = `<p class="text-gray-300">${data.ai_feedback}</p>`;
-        }
-    }
-    
-    // --- EVENT LISTENERS ---
-    // --- FIX: Added 'pause' and 'seeked' listeners for robust metric updates ---
-    videoPlayer.addEventListener('timeupdate', updateMetricsOnTimeUpdate);
-    videoPlayer.addEventListener('pause', updateMetricsOnTimeUpdate);
-    videoPlayer.addEventListener('seeked', updateMetricsOnTimeUpdate);
-    
-    fullModeBtn.addEventListener('click', () => switchVideoMode('full'));
-    skeletonModeBtn.addEventListener('click', () => switchVideoMode('skeleton'));
-    document.getElementById('analyze-another-btn').addEventListener('click', function() {
-        analysisSection.style.display = 'none';
-        document.getElementById('upload-section').classList.remove('hidden');
-        document.getElementById('upload-container').classList.remove('hidden');
-        videoUploadInput.value = '';
-        document.getElementById('file-name-display').textContent = '';
-        videoPlayer.src = '';
-        videoPlayer.load();
-    });
-</script>
-</body>
-</html>
-"""
-
-
-# ==============================================================================
-# 4. FLASK ROUTES
+# 3. FLASK ROUTES (templates in templates/)
 # ==============================================================================
 
 @app.route('/')
 def index():
-    """Serves the main HTML page."""
-    return render_template_string(HTML_TEMPLATE)
+    """Redirect to dashboard if logged in, else to login."""
+    if session.get("user_id"):
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
+
+
+@app.route('/login')
+def login_page():
+    """Login/signup page. Redirect to dashboard if already logged in."""
+    if session.get("user_id"):
+        return redirect(url_for("dashboard"))
+    return render_template("login.html")
+
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    """Dashboard: upload + history. Requires login."""
+    user = get_user_by_id(session["user_id"])
+    return render_template(
+        "dashboard.html",
+        logged_in=True,
+        standalone_upload=True,
+        user_email=user["email"],
+        user_name=user.get("name") or user["email"],
+    )
+
+
+@app.route('/profile', methods=['GET', 'POST'])
+@login_required
+def profile():
+    """Edit profile page. GET: show form. POST: update name, email, or password."""
+    user_id = session.get("user_id")
+    user = get_user_by_id(user_id)
+    if request.method == 'GET':
+        return render_template(
+            "profile.html",
+            logged_in=True,
+            user_email=user["email"],
+            user_name=user.get("name") or "",
+        )
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip() or None
+    email = (data.get("email") or "").strip().lower() or None
+    new_password = (data.get("new_password") or "").strip() or None
+    current_password = (data.get("current_password") or "") if new_password else None
+    updated_user, err = update_user(
+        user_id,
+        name=name if name else user.get("name"),
+        email=email if email else user["email"],
+        new_password=new_password,
+        current_password=current_password,
+    )
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({
+        "ok": True,
+        "email": updated_user["email"],
+        "name": updated_user.get("name") or updated_user["email"],
+    })
+
+
+@app.route('/analysis/<int:analysis_id>')
+@login_required
+def analysis_page(analysis_id):
+    """View a single analysis. Requires login and ownership."""
+    user_id = session.get("user_id")
+    analysis = get_analysis_by_id(analysis_id, user_id)
+    if not analysis:
+        return "Analysis not found", 404
+    base = request.url_root.rstrip("/")
+    analysis["output_video_full_url"] = f"{base}/static/{analysis['output_full_filename']}"
+    analysis["output_video_skeleton_url"] = f"{base}/static/{analysis['output_skeleton_filename']}"
+    user = get_user_by_id(user_id)
+    return render_template(
+        "analysis_page.html",
+        analysis=analysis,
+        logged_in=True,
+        user_email=user["email"],
+        user_name=user.get("name") or user["email"],
+    )
+
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    """Sign up: create account and log in (API)."""
+    if request.method == 'GET':
+        return redirect(url_for('login_page'))
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip()
+    password = data.get('password') or ''
+    name = (data.get('name') or '').strip()
+    user, err = create_user(email, password, name=name or None)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    session.clear()
+    session["user_id"] = user["id"]
+    session.permanent = True
+    token = create_auth_token(user["id"])
+    return jsonify({"ok": True, "email": user["email"], "token": token})
+
+
+@app.route('/login', methods=['POST'])
+def login():
+    """Log in with email and password (API)."""
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+    user = get_user_by_email(email)
+    if not user or not check_password_hash(user["password_hash"], password):
+        return jsonify({"ok": False, "error": "Invalid email or password."}), 401
+    session.clear()
+    session["user_id"] = user["id"]
+    session.permanent = True
+    token = create_auth_token(user["id"])
+    return jsonify({"ok": True, "email": user["email"], "token": token})
+
+
+@app.route('/api/session/restore', methods=['POST'])
+def session_restore():
+    """Restore session from a stored auth token (e.g. after server restart)."""
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    user_id = lookup_user_by_token(token)
+    if not user_id:
+        return jsonify({"ok": False, "error": "Invalid or expired token"}), 401
+    session.clear()
+    session["user_id"] = user_id
+    session.permanent = True
+    return jsonify({"ok": True})
+
+
+@app.route('/logout')
+def logout():
+    """Clear session and redirect to login."""
+    session.clear()
+    return redirect(url_for('login_page'))
+
+
+@app.route('/api/history')
+@login_required
+def api_history():
+    """Return analysis history for the current user (JSON)."""
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in", "login_required": True}), 401
+    analyses = get_user_analyses(user_id)
+    # Build static URLs for each (frontend can use same origin)
+    base = request.url_root.rstrip("/")
+    for a in analyses:
+        a["output_video_full_url"] = f"{base}/static/{a['output_full_filename']}"
+        a["output_video_skeleton_url"] = f"{base}/static/{a['output_skeleton_filename']}"
+    return jsonify({"analyses": analyses})
+
 
 @app.route('/analyze', methods=['POST'])
+@login_required
 def analyze():
-    """Handles video upload, processing, and returns JSON results."""
+    """Handles video upload, processing, and returns JSON results. Requires login."""
     if 'video' not in request.files:
         return jsonify({"error": "No video file part"}), 400
     
@@ -621,6 +761,21 @@ def analyze():
 
         try:
             results = analyze_bowling_pose(input_path)
+            if "error" not in results:
+                dims = results.get("video_dimensions") or {}
+                analysis_id = save_analysis(
+                    session["user_id"],
+                    file.filename,
+                    results.get("output_full_filename", ""),
+                    results.get("output_skeleton_filename", ""),
+                    results.get("release_features"),
+                    results.get("ai_feedback"),
+                    dims.get("width") or 0,
+                    dims.get("height") or 0,
+                    results.get("fps") or 30,
+                    results.get("frame_data"),
+                )
+                results["analysis_id"] = analysis_id
             return jsonify(results)
         except Exception as e:
             print(f"Error during analysis route: {e}")
@@ -634,4 +789,4 @@ def analyze():
 # ==============================================================================
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=5001)

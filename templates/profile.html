@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "sections/profile_content.html" %}
+{% endblock %}
+{% block scripts %}
+<script>
+    document.getElementById('logout-link')?.addEventListener('click', function() {
+        localStorage.removeItem('apex_cric_token');
+    });
+
+    document.getElementById('profile-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var errEl = document.getElementById('profile-error');
+        var successEl = document.getElementById('profile-success');
+        errEl.classList.add('hidden');
+        successEl.classList.add('hidden');
+
+        var payload = {
+            name: document.getElementById('profile-name').value.trim(),
+            email: document.getElementById('profile-email').value.trim(),
+            new_password: document.getElementById('profile-new-password').value.trim() || undefined,
+            current_password: document.getElementById('profile-new-password').value ? document.getElementById('profile-current-password').value : undefined
+        };
+        if (payload.new_password === undefined) delete payload.new_password;
+        if (payload.current_password === undefined) delete payload.current_password;
+
+        var res = await fetch('/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        var data = await res.json().catch(function() { return {}; });
+
+        if (data.ok) {
+            successEl.classList.remove('hidden');
+            document.getElementById('profile-current-password').value = '';
+            document.getElementById('profile-new-password').value = '';
+        } else {
+            errEl.textContent = data.error || 'Could not update profile.';
+            errEl.classList.remove('hidden');
+        }
+    });
+</script>
+{% endblock %}

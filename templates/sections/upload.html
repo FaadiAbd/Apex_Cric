@@ -1,0 +1,78 @@
+<div id="upload-section" class="screen-overlay {% if not standalone_upload %}hidden{% endif %}">
+    <div class="absolute inset-0 bg-cover bg-center" style="background-image: url('https://images.unsplash.com/photo-1595392490148-d75073809623?q=80&w=2070&auto=format&fit=crop');"></div>
+    <div class="absolute inset-0 bg-gray-900/70 backdrop-blur-sm"></div>
+
+    <div class="relative z-20 flex w-full h-full min-h-0">
+        {% if logged_in %}
+        <aside class="app-sidebar">
+            <div class="app-sidebar-logo">
+                <svg class="h-8 w-8 text-[var(--neon-blue)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                <h1 class="text-xl orbitron font-bold tracking-wider">BowlForm AI</h1>
+            </div>
+            <nav class="app-sidebar-nav">
+                <button type="button" id="nav-analyse" class="active" aria-current="page">
+                    <span class="material-icons text-lg">analytics</span>
+                    Analyse
+                </button>
+                <button type="button" id="nav-history">
+                    <span class="material-icons text-lg">history</span>
+                    History
+                </button>
+            </nav>
+            <div class="app-sidebar-bottom">
+                <div class="app-sidebar-user">{{ user_name or user_email }}</div>
+                <a href="/profile" class="pill-button pill-button-secondary text-sm flex items-center justify-center gap-2 mb-2 w-full">
+                    <span class="material-icons text-lg">person</span>
+                    Edit Profile
+                </a>
+                <a href="/logout" class="pill-button text-sm flex items-center justify-center gap-2" id="logout-link">Logout</a>
+            </div>
+        </aside>
+        {% endif %}
+
+        <main class="app-main">
+            <div id="analyse-pane" class="app-pane active flex items-center justify-center p-4">
+                <div id="upload-container" class="w-full max-w-lg">
+                    <div class="glassmorphic p-6 md:p-8">
+                        <div class="text-center mb-8">
+                            <h1 class="text-3xl md:text-4xl orbitron font-bold text-white tracking-wide">Bowling Analysis</h1>
+                            <p class="text-gray-300 mt-2">Get instant AI feedback on your action.</p>
+                        </div>
+                        <form class="space-y-6" id="analysis-form">
+                            <div class="text-center pt-4">
+                                <label class="cursor-pointer group" for="video-upload">
+                                    <div class="w-40 h-40 mx-auto border-2 border-dashed border-gray-500 rounded-full flex flex-col items-center justify-center transition-all duration-300 hover:border-[var(--brand-glow)] hover:bg-white/5 upload-button-glow">
+                                        <span class="material-icons text-5xl text-gray-400 group-hover:text-[var(--brand-glow)] transition-colors">upload</span>
+                                        <span class="mt-2 text-sm font-semibold text-white">Upload Video</span>
+                                    </div>
+                                </label>
+                                <input accept=".mp4,.mov,.avi" class="hidden" id="video-upload" type="file"/>
+                                <p id="file-name-display" class="text-sm text-[var(--brand-glow)] mt-4 h-5"></p>
+                                <p class="text-xs text-gray-400 mt-2">Use a clear side-view video for best results.</p>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div id="history-pane" class="app-pane p-4 lg:p-8">
+                <div class="w-full max-w-2xl mx-auto">
+                    <h2 class="orbitron text-2xl font-bold text-[var(--neon-blue)] mb-6">Analysis History</h2>
+                    <div id="history-list-container" class="rounded-2xl glassmorphic-analysis p-4 min-h-[200px]">
+                        <p id="history-loading" class="text-gray-400 text-sm p-4">Loading...</p>
+                        <ul id="history-list" class="history-list hidden"></ul>
+                        <p id="history-empty" class="text-gray-500 text-sm p-4 hidden">No analyses yet. Upload a video to get started.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="hidden fixed inset-0 z-50 bg-gray-900/80 backdrop-blur-md flex items-center justify-center" id="processing-modal">
+        <div class="text-center">
+            <div class="loader mx-auto"></div>
+            <h2 class="text-2xl font-bold mt-6 text-white orbitron">Analyzing your action...</h2>
+            <p class="text-gray-300 mt-2">This may take a minute. Please wait.</p>
+        </div>
+    </div>
+</div>
