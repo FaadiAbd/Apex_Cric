@@ -6,10 +6,19 @@ import os
 import uuid
 import sqlite3
 import secrets
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template, url_for, redirect, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from functools import wraps
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+import qrcode
+from io import BytesIO
+import base64
 load_dotenv()
 
 # MediaPipe Tasks API (pose_landmarker)
@@ -104,6 +113,18 @@ def init_db():
             conn.execute("ALTER TABLE analyses ADD COLUMN player_id INTEGER REFERENCES players(id)")
         except sqlite3.OperationalError:
             pass  # column already exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shared_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                share_id TEXT UNIQUE NOT NULL,
+                plan_type TEXT,
+                plan_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                access_count INTEGER DEFAULT 0
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS auth_tokens (
                 user_id INTEGER NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -570,6 +591,229 @@ Example:
         print(f" {error_message}")
         return f"Could not get training plan. {error_message}"
 
+
+def generate_tactical_advice(bowler_type, bowler_hand, batsman_hand, match_phase, match_format):
+    """Generate tactical cricket bowling advice using AI."""
+    if not API_KEY or "sk-or-" not in API_KEY:
+        return "API key not configured."
+
+    prompt = f"""
+You are an expert cricket tactician and field strategist. Generate a detailed tactical bowling plan with the following context:
+- Bowler Type: {bowler_type}
+- Bowler Hand: {bowler_hand}
+- Batsman Hand: {batsman_hand}
+- Match Phase: {match_phase}
+- Match Format: {match_format}
+
+Provide a comprehensive tactical card with these sections (use exact headings with ###):
+
+### Bowling Lengths
+- (List 3-4 recommended lengths with percentages)
+
+### Line Strategy
+- (List 3-4 lines with percentages)
+
+### Field Setup
+- Slip, Gully, Point, Cover, Mid-off, Mid-on, Square Leg, Fine Leg, Deep Square, Long-on, Long-off
+
+### Ball-by-Ball Plan
+- Ball 1: (length and line)
+- Ball 2: (length and line)
+- Ball 3: (length and line)
+- Ball 4: (length and line)
+- Ball 5: (length and line)
+- Ball 6: (length and line)
+
+### Key Strategies
+- Wicket-taking approach: (1 line)
+- Run containment: (1 line)
+- Variations to use: (1 line)
+
+### Delivery Mix (%)
+- (Show percentage breakdown for this phase)
+
+Use clear, tactical language. No extra text outside these sections.
+"""
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5000",
+        "X-Title": "BowlForm AI"
+    }
+
+    data = {
+        "model": MODEL_ID,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+
+    try:
+        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data, timeout=30)
+        if res.status_code == 200:
+            reply = res.json()["choices"][0]["message"]["content"]
+            return reply.strip()
+        else:
+            return f"Could not generate tactical advice. Error: {res.status_code}"
+    except Exception as e:
+        return f"Error generating tactical advice: {str(e)}"
+
+
+def generate_pdf_tactical_card(bowler_type, bowler_hand, batsman_hand, match_phase, match_format, tactical_advice):
+    """Generate a medium-complexity PDF for the tactical card."""
+    pdf_filename = f"tactical_{uuid.uuid4().hex}.pdf"
+    pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+    
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor=colors.HexColor('#19faaa'),
+        spaceAfter=12,
+        alignment=1
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=12,
+        textColor=colors.HexColor('#0ea8f0'),
+        spaceAfter=8,
+        spaceBefore=8
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        parent=styles['BodyText'],
+        fontSize=9,
+        leading=12
+    )
+    
+    # Title
+    story.append(Paragraph("🏏 TACTICAL BOWLING CARD", title_style))
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Match Context Table
+    context_data = [
+        ['MATCH CONTEXT', ''],
+        ['Bowler Type', bowler_type],
+        ['Bowler Hand', bowler_hand],
+        ['Batsman Hand', batsman_hand],
+        ['Match Phase', match_phase],
+        ['Match Format', match_format],
+    ]
+    context_table = Table(context_data, colWidths=[2*inch, 3.5*inch])
+    context_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#0ea8f0')),
+        ('TEXTCOLOR', (0, 0), (1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (1, 0), 8),
+        ('BACKGROUND', (0, 1), (0, -1), colors.lightgrey),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+    ]))
+    story.append(context_table)
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Tactical Advice Content
+    advice_lines = tactical_advice.split('\n')
+    for line in advice_lines:
+        line = line.strip()
+        if line.startswith('###'):
+            heading = line.replace('###', '').strip()
+            story.append(Paragraph(heading, heading_style))
+        elif line.startswith('-'):
+            bullet = line.replace('-', '', 1).strip()
+            story.append(Paragraph(f"• {bullet}", body_style))
+        elif line:
+            story.append(Paragraph(line, body_style))
+        else:
+            story.append(Spacer(1, 0.05*inch))
+    
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Footer
+    footer_style = ParagraphStyle(
+        'Footer',
+        parent=styles['Normal'],
+        fontSize=7,
+        textColor=colors.grey,
+        alignment=1
+    )
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", footer_style))
+    
+    # Build PDF
+    doc.build(story)
+    return pdf_filename
+
+
+def create_share_link(user_id, plan_type, plan_data, expires_days=7):
+    """Create a shareable link for a tactical/training plan."""
+    share_id = secrets.token_urlsafe(16)
+    expires_at = datetime.now() + timedelta(days=expires_days)
+    
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO shared_plans (user_id, share_id, plan_type, plan_data, expires_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_id, share_id, plan_type, json.dumps(plan_data), expires_at.isoformat())
+        )
+        conn.commit()
+    
+    return share_id, expires_at
+
+
+def get_shared_plan(share_id):
+    """Retrieve a shared plan (no login required)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT user_id, plan_type, plan_data, expires_at, access_count
+               FROM shared_plans WHERE share_id = ?""",
+            (share_id,)
+        ).fetchone()
+    
+    if not row:
+        return None
+    
+    rec = dict(row)
+    expires_at = datetime.fromisoformat(rec['expires_at'])
+    
+    if expires_at < datetime.now():
+        # Delete expired share
+        with get_db() as conn:
+            conn.execute("DELETE FROM shared_plans WHERE share_id = ?", (share_id,))
+            conn.commit()
+        return None
+    
+    # Update access count
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE shared_plans SET access_count = access_count + 1 WHERE share_id = ?",
+            (share_id,)
+        )
+        conn.commit()
+    
+    rec['plan_data'] = json.loads(rec['plan_data'])
+    return rec
+
+
+def delete_share(share_id, user_id):
+    """Delete a share link (auth required)."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM shared_plans WHERE share_id = ? AND user_id = ?",
+            (share_id, user_id)
+        )
+        conn.commit()
+
+
     headers = {
     "Authorization": f"Bearer {API_KEY}",
     "Content-Type": "application/json",
@@ -987,6 +1231,129 @@ def api_training_plan():
         return jsonify({"ok": False, "error": "No release features available for this analysis"}), 400
     plan = generate_training_plan(features, goal)
     return jsonify({"ok": True, "plan": plan})
+
+
+@app.route('/api/tactical_advice', methods=['POST'])
+def api_tactical_advice():
+    """Generate tactical bowling advice (no login required)."""
+    data = request.get_json(silent=True) or {}
+    bowler_type = (data.get("bowler_type") or "").strip()
+    bowler_hand = (data.get("bowler_hand") or "").strip()
+    batsman_hand = (data.get("batsman_hand") or "").strip()
+    match_phase = (data.get("match_phase") or "").strip()
+    match_format = (data.get("match_format") or "").strip()
+    
+    if not all([bowler_type, bowler_hand, batsman_hand, match_phase, match_format]):
+        return jsonify({"ok": False, "error": "All fields are required"}), 400
+    
+    advice = generate_tactical_advice(bowler_type, bowler_hand, batsman_hand, match_phase, match_format)
+    return jsonify({"ok": True, "advice": advice})
+
+
+@app.route('/api/export_tactical_pdf', methods=['POST'])
+@login_required
+def api_export_tactical_pdf():
+    """Generate and share a PDF tactical card."""
+    data = request.get_json(silent=True) or {}
+    bowler_type = (data.get("bowler_type") or "").strip()
+    bowler_hand = (data.get("bowler_hand") or "").strip()
+    batsman_hand = (data.get("batsman_hand") or "").strip()
+    match_phase = (data.get("match_phase") or "").strip()
+    match_format = (data.get("match_format") or "").strip()
+    tactical_advice = (data.get("tactical_advice") or "").strip()
+    expires_days = data.get("expires_days", 7)
+    
+    if not all([bowler_type, bowler_hand, batsman_hand, match_phase, match_format, tactical_advice]):
+        return jsonify({"ok": False, "error": "All fields are required"}), 400
+    
+    user_id = session.get("user_id")
+    
+    try:
+        pdf_filename = generate_pdf_tactical_card(bowler_type, bowler_hand, batsman_hand, match_phase, match_format, tactical_advice)
+        
+        plan_data = {
+            "bowler_type": bowler_type,
+            "bowler_hand": bowler_hand,
+            "batsman_hand": batsman_hand,
+            "match_phase": match_phase,
+            "match_format": match_format,
+            "tactical_advice": tactical_advice,
+            "pdf_filename": pdf_filename
+        }
+        
+        share_id, expires_at = create_share_link(user_id, "tactical", plan_data, expires_days)
+        share_url = url_for('view_shared_plan', share_id=share_id, _external=True)
+        
+        # Generate QR code
+        qr = qrcode.QRCode(version=1, box_size=10, border=2)
+        qr.add_data(share_url)
+        qr.make()
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert to base64 for embedding
+        img_io = BytesIO()
+        img.save(img_io, 'PNG')
+        img_io.seek(0)
+        qr_base64 = base64.b64encode(img_io.getvalue()).decode()
+        
+        return jsonify({
+            "ok": True,
+            "share_url": share_url,
+            "expires_at": expires_at.isoformat(),
+            "qr_code": f"data:image/png;base64,{qr_base64}",
+            "pdf_download": url_for('uploaded_file', filename=pdf_filename, _external=True)
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route('/share/<share_id>')
+def view_shared_plan(share_id):
+    """View a shared tactical/training plan."""
+    plan = get_shared_plan(share_id)
+    if not plan:
+        return "Shared plan not found or has expired.", 404
+    
+    return jsonify({
+        "ok": True,
+        "plan_type": plan['plan_type'],
+        "plan_data": plan['plan_data'],
+        "access_count": plan['access_count']
+    })
+
+
+@app.route('/api/download_tactical_pdf', methods=['POST'])
+@login_required
+def api_download_tactical_pdf():
+    """Generate a tactical PDF and return it as a file download."""
+    data = request.get_json(silent=True) or {}
+    bowler_type = (data.get("bowler_type") or "").strip()
+    bowler_hand = (data.get("bowler_hand") or "").strip()
+    batsman_hand = (data.get("batsman_hand") or "").strip()
+    match_phase = (data.get("match_phase") or "").strip()
+    match_format = (data.get("match_format") or "").strip()
+    tactical_advice = (data.get("tactical_advice") or "").strip()
+
+    if not all([bowler_type, bowler_hand, batsman_hand, match_phase, match_format, tactical_advice]):
+        return jsonify({"ok": False, "error": "All fields are required"}), 400
+
+    try:
+        pdf_filename = generate_pdf_tactical_card(bowler_type, bowler_hand, batsman_hand, match_phase, match_format, tactical_advice)
+        return send_from_directory(app.config['UPLOAD_FOLDER'], pdf_filename, as_attachment=True)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route('/api/delete_share/<share_id>', methods=['DELETE'])
+@login_required
+def api_delete_share(share_id):
+    """Delete a shared link."""
+    user_id = session.get("user_id")
+    try:
+        delete_share(share_id, user_id)
+        return jsonify({"ok": True, "message": "Share deleted"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route('/analyze', methods=['POST'])
