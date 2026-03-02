@@ -6,7 +6,7 @@ import os
 import uuid
 import sqlite3
 import secrets
-from flask import Flask, request, jsonify, render_template, url_for, redirect, session
+from flask import Flask, request, jsonify, render_template, url_for, redirect, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from functools import wraps
@@ -82,6 +82,26 @@ def init_db():
         """)
         try:
             conn.execute("ALTER TABLE analyses ADD COLUMN frame_data TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS players (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                age INTEGER,
+                height REAL,
+                weight REAL,
+                bowling_arm TEXT,
+                bowling_style TEXT,
+                team_name TEXT,
+                photo_filename TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        try:
+            conn.execute("ALTER TABLE analyses ADD COLUMN player_id INTEGER REFERENCES players(id)")
         except sqlite3.OperationalError:
             pass  # column already exists
         conn.execute("""
@@ -204,15 +224,16 @@ def update_user(user_id, name=None, email=None, new_password=None, current_passw
 
 
 def save_analysis(user_id, original_filename, output_full_filename, output_skeleton_filename,
-                  release_features, ai_feedback, video_width, video_height, fps, frame_data=None):
+                  release_features, ai_feedback, video_width, video_height, fps, frame_data=None, player_id=None):
     """Save an analysis record for the user. Returns the new analysis id."""
     with get_db() as conn:
         cur = conn.execute(
-            """INSERT INTO analyses (user_id, original_filename, output_full_filename, output_skeleton_filename,
+            """INSERT INTO analyses (user_id, player_id, original_filename, output_full_filename, output_skeleton_filename,
                release_features, ai_feedback, video_width, video_height, fps, frame_data)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 user_id,
+                player_id or None,
                 original_filename or None,
                 output_full_filename,
                 output_skeleton_filename,
@@ -232,9 +253,12 @@ def get_user_analyses(user_id, limit=50):
     """Return list of analysis records for the user, newest first."""
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT id, created_at, original_filename, output_full_filename, output_skeleton_filename,
-                      release_features, ai_feedback, video_width, video_height, fps, frame_data
-               FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT ?""",
+            """SELECT a.id, a.created_at, a.original_filename, a.output_full_filename, a.output_skeleton_filename,
+                      a.release_features, a.ai_feedback, a.video_width, a.video_height, a.fps, a.frame_data, a.player_id,
+                      p.name as player_name, p.age, p.height, p.weight, p.bowling_arm, p.bowling_style, p.team_name, p.photo_filename
+               FROM analyses a
+               LEFT JOIN players p ON a.player_id = p.id
+               WHERE a.user_id = ? ORDER BY a.created_at DESC LIMIT ?""",
             (user_id, limit),
         ).fetchall()
     out = []
@@ -261,9 +285,12 @@ def get_analysis_by_id(analysis_id, user_id):
     """Return one analysis record if it exists and belongs to the user, else None."""
     with get_db() as conn:
         row = conn.execute(
-            """SELECT id, created_at, original_filename, output_full_filename, output_skeleton_filename,
-                      release_features, ai_feedback, video_width, video_height, fps, frame_data
-               FROM analyses WHERE id = ? AND user_id = ?""",
+            """SELECT a.id, a.created_at, a.original_filename, a.output_full_filename, a.output_skeleton_filename,
+                      a.release_features, a.ai_feedback, a.video_width, a.video_height, a.fps, a.frame_data, a.player_id,
+                      p.name as player_name, p.age, p.height, p.weight, p.bowling_arm, p.bowling_style, p.team_name, p.photo_filename
+               FROM analyses a
+               LEFT JOIN players p ON a.player_id = p.id
+               WHERE a.id = ? AND a.user_id = ?""",
             (analysis_id, user_id),
         ).fetchone()
     if not row:
@@ -282,6 +309,122 @@ def get_analysis_by_id(analysis_id, user_id):
     else:
         rec["frame_data"] = []
     return rec
+
+
+# ==============================================================================
+# PLAYER MANAGEMENT FUNCTIONS
+# ==============================================================================
+
+def create_player(user_id, name, age=None, height=None, weight=None, bowling_arm=None, 
+                  bowling_style=None, team_name=None, photo_filename=None):
+    """Create a new player profile. Returns (player_dict, None) or (None, error_message)."""
+    if not name or not name.strip():
+        return None, "Player name is required."
+    
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO players (user_id, name, age, height, weight, bowling_arm, 
+               bowling_style, team_name, photo_filename)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, name.strip(), age, height, weight, bowling_arm, bowling_style, team_name, photo_filename),
+        )
+        conn.commit()
+        player_id = cur.lastrowid
+    return get_player_by_id(player_id, user_id), None
+
+
+def get_player_by_id(player_id, user_id):
+    """Return player record if it exists and belongs to the user, else None."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, user_id, name, age, height, weight, bowling_arm, bowling_style, 
+                      team_name, photo_filename, created_at, updated_at
+               FROM players WHERE id = ? AND user_id = ?""",
+            (player_id, user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_players(user_id, limit=100):
+    """Return list of all players for a user, newest first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, user_id, name, age, height, weight, bowling_arm, bowling_style, 
+                      team_name, photo_filename, created_at, updated_at
+               FROM players WHERE user_id = ? ORDER BY created_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_player(player_id, user_id, name=None, age=None, height=None, weight=None, 
+                  bowling_arm=None, bowling_style=None, team_name=None, photo_filename=None):
+    """Update player profile. Returns (player_dict, None) or (None, error_message)."""
+    player = get_player_by_id(player_id, user_id)
+    if not player:
+        return None, "Player not found."
+    
+    updates = []
+    params = []
+    
+    if name is not None:
+        if not name.strip():
+            return None, "Player name cannot be empty."
+        updates.append("name = ?")
+        params.append(name.strip())
+    
+    if age is not None:
+        updates.append("age = ?")
+        params.append(age)
+    
+    if height is not None:
+        updates.append("height = ?")
+        params.append(height)
+    
+    if weight is not None:
+        updates.append("weight = ?")
+        params.append(weight)
+    
+    if bowling_arm is not None:
+        updates.append("bowling_arm = ?")
+        params.append(bowling_arm)
+    
+    if bowling_style is not None:
+        updates.append("bowling_style = ?")
+        params.append(bowling_style)
+    
+    if team_name is not None:
+        updates.append("team_name = ?")
+        params.append(team_name)
+    
+    if photo_filename is not None:
+        updates.append("photo_filename = ?")
+        params.append(photo_filename)
+    
+    if updates:
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(player_id)
+        params.append(user_id)
+        with get_db() as conn:
+            conn.execute(
+                f"UPDATE players SET {', '.join(updates)} WHERE id = ? AND user_id = ?",
+                tuple(params),
+            )
+            conn.commit()
+    
+    return get_player_by_id(player_id, user_id), None
+
+
+def delete_player(player_id, user_id):
+    """Delete a player. Returns (True, None) or (False, error_message)."""
+    player = get_player_by_id(player_id, user_id)
+    if not player:
+        return False, "Player not found."
+    
+    with get_db() as conn:
+        conn.execute("DELETE FROM players WHERE id = ? AND user_id = ?", (player_id, user_id))
+        conn.commit()
+    return True, None
 
 
 def login_required(f):
@@ -363,6 +506,69 @@ Format the output as a simple list. Example:
 - Engage your core for better stability.
 - Follow through fully towards the target.
 """
+
+
+def generate_training_plan(features, goal):
+    """Create a weekly training plan based on biomechanical features and a training goal."""
+    if not API_KEY or "sk-or-" not in API_KEY:
+        print("API key not configured.")
+        return "API key not configured. Please check the server."
+
+    prompt = f"""
+You are a certified cricket strength and conditioning coach. Given the following biomechanical metrics from a bowling release:
+- Elbow Angle: {features.get('elbow_angle')}°
+- Shoulder Angle: {features.get('shoulder_angle')}°
+- Arm Verticality: {features.get('arm_verticality')}°
+- Stride Length: {features.get('stride_length')}×
+
+Create a ** simple, beginner-friendly 2‑week training plan** focused on **{goal}**. Use clear everyday language and basic drills that require minimal equipment. Format the response in plain Markdown with:
+
+1. A short intro explaining the main goal in 3 or more sentence.
+2. A heading for each day (e.g. `### Day 1`) followed by 3‑4 easy bullet points describing the exercises.
+3. Exactly 14 day sections – keep each day very concise.
+4. Use `-` for list items, headings with `###`.
+5. Respond only with the Markdown text so it can be displayed directly.
+
+Example:
+
+### Day 1
+- Walk briskly 10 minutes
+- Shoulder rolls x20
+- Simple wrist stretches
+
+### Day 2
+- Gentle jogging 5 minutes
+
+...and so on until Day 14.
+
+"""
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5000",
+        "X-Title": "BowlForm AI"
+    }
+
+    data = {
+        "model": MODEL_ID,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+
+    try:
+        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data, timeout=30)
+        if res.status_code == 200:
+            reply = res.json()["choices"][0]["message"]["content"]
+            return reply.strip()
+        else:
+            error_message = f"API error {res.status_code}: {res.text}"
+            print(f" {error_message}")
+            return f"Could not get training plan. {error_message}"
+    except Exception as e:
+        error_message = f"API request failed: {str(e)}"
+        print(f" {error_message}")
+        return f"Could not get training plan. {error_message}"
 
     headers = {
     "Authorization": f"Bearer {API_KEY}",
@@ -616,6 +822,19 @@ def dashboard():
     )
 
 
+@app.route('/players')
+@login_required
+def players_page():
+    """Players management page. Requires login."""
+    user = get_user_by_id(session["user_id"])
+    return render_template(
+        "players.html",
+        logged_in=True,
+        user_email=user["email"],
+        user_name=user.get("name") or user["email"],
+    )
+
+
 @app.route('/profile', methods=['GET', 'POST'])
 @login_required
 def profile():
@@ -727,6 +946,13 @@ def logout():
     return redirect(url_for('login_page'))
 
 
+# serve uploaded media (player photos, etc.)
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    """Return a file from the uploads folder."""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+
 @app.route('/api/history')
 @login_required
 def api_history():
@@ -741,6 +967,26 @@ def api_history():
         a["output_video_full_url"] = f"{base}/static/{a['output_full_filename']}"
         a["output_video_skeleton_url"] = f"{base}/static/{a['output_skeleton_filename']}"
     return jsonify({"analyses": analyses})
+
+
+@app.route('/api/training_plan', methods=['POST'])
+@login_required
+def api_training_plan():
+    """Generate a training plan from an analysis and a selected goal."""
+    data = request.get_json(silent=True) or {}
+    analysis_id = data.get("analysis_id")
+    goal = (data.get("goal") or "").strip()
+    if not analysis_id or not goal:
+        return jsonify({"ok": False, "error": "analysis_id and goal are required"}), 400
+    user_id = session.get("user_id")
+    analysis = get_analysis_by_id(analysis_id, user_id)
+    if not analysis:
+        return jsonify({"ok": False, "error": "Analysis not found"}), 404
+    features = analysis.get("release_features") or {}
+    if not features:
+        return jsonify({"ok": False, "error": "No release features available for this analysis"}), 400
+    plan = generate_training_plan(features, goal)
+    return jsonify({"ok": True, "plan": plan})
 
 
 @app.route('/analyze', methods=['POST'])
@@ -763,6 +1009,7 @@ def analyze():
             results = analyze_bowling_pose(input_path)
             if "error" not in results:
                 dims = results.get("video_dimensions") or {}
+                player_id = request.form.get("player_id", type=int)
                 analysis_id = save_analysis(
                     session["user_id"],
                     file.filename,
@@ -774,6 +1021,7 @@ def analyze():
                     dims.get("height") or 0,
                     results.get("fps") or 30,
                     results.get("frame_data"),
+                    player_id=player_id,
                 )
                 results["analysis_id"] = analysis_id
             return jsonify(results)
@@ -783,6 +1031,110 @@ def analyze():
         finally:
             if os.path.exists(input_path):
                 os.remove(input_path)
+
+
+# ==============================================================================
+# PLAYER API ROUTES
+# ==============================================================================
+
+@app.route('/api/players', methods=['GET', 'POST'])
+@login_required
+def api_players():
+    """GET: List all players. POST: Create a new player."""
+    user_id = session.get("user_id")
+    
+    if request.method == 'GET':
+        players = get_user_players(user_id)
+        return jsonify({"ok": True, "players": players})
+    
+    # POST: Create new player
+    data = request.form
+    name = (data.get("name") or "").strip()
+    age = data.get("age", type=int)
+    height = data.get("height", type=float)
+    weight = data.get("weight", type=float)
+    bowling_arm = (data.get("bowling_arm") or "").strip() or None
+    bowling_style = (data.get("bowling_style") or "").strip() or None
+    team_name = (data.get("team_name") or "").strip() or None
+    
+    photo_filename = None
+    if 'photo' in request.files:
+        photo_file = request.files['photo']
+        if photo_file and photo_file.filename != '':
+            photo_filename = f"player_{uuid.uuid4().hex}_{photo_file.filename}"
+            photo_path = os.path.join(app.config['UPLOAD_FOLDER'], photo_filename)
+            photo_file.save(photo_path)
+    
+    player, err = create_player(
+        user_id, 
+        name=name,
+        age=age,
+        height=height,
+        weight=weight,
+        bowling_arm=bowling_arm,
+        bowling_style=bowling_style,
+        team_name=team_name,
+        photo_filename=photo_filename,
+    )
+    
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "player": player})
+
+
+@app.route('/api/players/<int:player_id>', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def api_player_detail(player_id):
+    """GET: Get player details. POST: Update player. DELETE: Delete player."""
+    user_id = session.get("user_id")
+    
+    if request.method == 'GET':
+        player = get_player_by_id(player_id, user_id)
+        if not player:
+            return jsonify({"ok": False, "error": "Player not found"}), 404
+        return jsonify({"ok": True, "player": player})
+    
+    elif request.method == 'POST':
+        data = request.form
+        name = (data.get("name") or "").strip() or None
+        age = data.get("age", type=int) if data.get("age") else None
+        height = data.get("height", type=float) if data.get("height") else None
+        weight = data.get("weight", type=float) if data.get("weight") else None
+        bowling_arm = (data.get("bowling_arm") or "").strip() or None
+        bowling_style = (data.get("bowling_style") or "").strip() or None
+        team_name = (data.get("team_name") or "").strip() or None
+        
+        photo_filename = None
+        if 'photo' in request.files:
+            photo_file = request.files['photo']
+            if photo_file and photo_file.filename != '':
+                photo_filename = f"player_{uuid.uuid4().hex}_{photo_file.filename}"
+                photo_path = os.path.join(app.config['UPLOAD_FOLDER'], photo_filename)
+                photo_file.save(photo_path)
+        
+        player, err = update_player(
+            player_id, 
+            user_id,
+            name=name,
+            age=age,
+            height=height,
+            weight=weight,
+            bowling_arm=bowling_arm,
+            bowling_style=bowling_style,
+            team_name=team_name,
+            photo_filename=photo_filename,
+        )
+        
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        return jsonify({"ok": True, "player": player})
+    
+    elif request.method == 'DELETE':
+        success, err = delete_player(player_id, user_id)
+        if not success:
+            return jsonify({"ok": False, "error": err}), 404
+        return jsonify({"ok": True, "message": "Player deleted successfully"})
+
 
 # ==============================================================================
 # 5. APPLICATION ENTRY POINT
