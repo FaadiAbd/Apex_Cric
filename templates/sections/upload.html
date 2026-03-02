@@ -22,6 +22,10 @@
                     <span class="material-icons text-lg">fitness_center</span>
                     Training Plan
                 </button>
+                <button type="button" id="nav-tactical">
+                    <span class="material-icons text-lg">sports_cricket</span>
+                    Tactical Advice
+                </button>
                 <button type="button" id="nav-players">
                     <span class="material-icons text-lg">person_add</span>
                     Players
@@ -111,6 +115,72 @@
                         <button type="submit" class="px-6 py-2 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-lg font-semibold hover:from-cyan-600 hover:to-cyan-700 transition">Generate Plan</button>
                     </form>
                     <div id="training-output" class="mt-6 p-4 bg-slate-800 rounded-lg text-sm whitespace-pre-wrap"></div>
+                </div>
+            </div>
+
+            <div id="tactical-pane" class="app-pane p-4 lg:p-8 hidden">
+                <div class="w-full max-w-2xl mx-auto">
+                    <h2 class="orbitron text-2xl font-bold text-[var(--neon-blue)] mb-6">Tactical Bowling Advice</h2>
+                    <form id="tactical-form" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Bowler Type</label>
+                            <select id="tactical-bowler-type" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                <option value="">Select bowler type</option>
+                                <option value="Right-arm Fast">Right-arm Fast</option>
+                                <option value="Left-arm Fast">Left-arm Fast</option>
+                                <option value="Right-arm Medium">Right-arm Medium</option>
+                                <option value="Left-arm Medium">Left-arm Medium</option>
+                                <option value="Off-spin">Off-spin</option>
+                                <option value="Leg-spin">Leg-spin</option>
+                                <option value="Left-arm Spin">Left-arm Spin</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-semibold mb-1">Bowler Hand</label>
+                                <select id="tactical-bowler-hand" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                    <option value="">Select</option>
+                                    <option value="Right">Right</option>
+                                    <option value="Left">Left</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold mb-1">Batsman Hand</label>
+                                <select id="tactical-batsman-hand" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                    <option value="">Select</option>
+                                    <option value="Right">Right-handed</option>
+                                    <option value="Left">Left-handed</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-semibold mb-1">Match Phase</label>
+                                <select id="tactical-match-phase" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                    <option value="">Select phase</option>
+                                    <option value="Powerplay">Powerplay</option>
+                                    <option value="Middle Overs">Middle Overs</option>
+                                    <option value="Death Overs">Death Overs</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold mb-1">Match Format</label>
+                                <select id="tactical-match-format" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                    <option value="">Select format</option>
+                                    <option value="T20">T20</option>
+                                    <option value="ODI">ODI</option>
+                                    <option value="Test">Test</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit" class="px-6 py-2 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-lg font-semibold hover:from-cyan-600 hover:to-cyan-700 transition">Generate Advice</button>
+                    </form>
+                    <div id="tactical-output" class="mt-6 p-4 bg-slate-800 rounded-lg text-sm hidden">
+                        <div id="tactical-content"></div>
+                        <div class="mt-4">
+                            <button id="tactical-download-btn" class="px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 rounded-lg font-semibold hover:from-green-600 hover:to-green-700 transition">📥 Download PDF</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>

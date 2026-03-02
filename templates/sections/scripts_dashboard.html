@@ -24,10 +24,12 @@
     const navAnalyse = document.getElementById('nav-analyse');
     const navHistory = document.getElementById('nav-history');
     const navTraining = document.getElementById('nav-training');
+    const navTactical = document.getElementById('nav-tactical');
     const navPlayers = document.getElementById('nav-players');
     const analysePane = document.getElementById('analyse-pane');
     const historyPane = document.getElementById('history-pane');
     const trainingPane = document.getElementById('training-pane');
+    const tacticalPane = document.getElementById('tactical-pane');
     const historyListEl = document.getElementById('history-list');
     const historyLoading = document.getElementById('history-loading');
     const historyEmpty = document.getElementById('history-empty');
@@ -36,14 +38,17 @@
         const isAnalyse = pane === 'analyse';
         const isHistory = pane === 'history';
         const isTraining = pane === 'training';
+        const isTactical = pane === 'tactical';
         const isPlayers = pane === 'players';
         
         if (analysePane) analysePane.classList.toggle('active', isAnalyse);
         if (historyPane) historyPane.classList.toggle('active', isHistory);
         if (trainingPane) trainingPane.classList.toggle('active', isTraining);
+        if (tacticalPane) tacticalPane.classList.toggle('active', isTactical);
         if (navAnalyse) navAnalyse.classList.toggle('active', isAnalyse);
         if (navHistory) navHistory.classList.toggle('active', isHistory);
         if (navTraining) navTraining.classList.toggle('active', isTraining);
+        if (navTactical) navTactical.classList.toggle('active', isTactical);
         if (navPlayers) navPlayers.classList.toggle('active', isPlayers);
         
         if (isHistory) fetchAndRenderHistory();
@@ -109,6 +114,7 @@
     if (navAnalyse) navAnalyse.addEventListener('click', () => showPane('analyse'));
     if (navHistory) navHistory.addEventListener('click', () => showPane('history'));
     if (navTraining) navTraining.addEventListener('click', () => showPane('training'));
+    if (navTactical) navTactical.addEventListener('click', () => showPane('tactical'));
     if (navPlayers) navPlayers.addEventListener('click', () => showPane('players'));
 
     const videoUploadInput = document.getElementById('video-upload');
@@ -209,6 +215,101 @@
         } catch (err) {
             out.textContent = 'Request failed';
             console.error(err);
+        }
+    });
+
+    // Tactical advice form submission
+    document.getElementById('tactical-form')?.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const bowlerType = document.getElementById('tactical-bowler-type').value;
+        const bowlerHand = document.getElementById('tactical-bowler-hand').value;
+        const batsmanHand = document.getElementById('tactical-batsman-hand').value;
+        const matchPhase = document.getElementById('tactical-match-phase').value;
+        const matchFormat = document.getElementById('tactical-match-format').value;
+        
+        if (!bowlerType || !bowlerHand || !batsmanHand || !matchPhase || !matchFormat) {
+            alert('Please fill all fields.');
+            return;
+        }
+
+        const output = document.getElementById('tactical-output');
+        const content = document.getElementById('tactical-content');
+        content.innerHTML = '<div class="text-center">Generating tactical advice...</div>';
+        output.classList.remove('hidden');
+
+        try {
+            const res = await fetch('/api/tactical_advice', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    bowler_type: bowlerType,
+                    bowler_hand: bowlerHand,
+                    batsman_hand: batsmanHand,
+                    match_phase: matchPhase,
+                    match_format: matchFormat
+                })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                content.innerHTML = markdownToHtml(data.advice);
+                // Store for export
+                window.lastTacticalAdvice = {
+                    bowler_type: bowlerType,
+                    bowler_hand: bowlerHand,
+                    batsman_hand: batsmanHand,
+                    match_phase: matchPhase,
+                    match_format: matchFormat,
+                    tactical_advice: data.advice
+                };
+            } else {
+                content.innerHTML = '<p style="color: #ff6b6b;">Error: ' + (data.error || 'unknown') + '</p>';
+            }
+        } catch (err) {
+            content.innerHTML = '<p style="color: #ff6b6b;">Request failed</p>';
+            console.error(err);
+        }
+    });
+
+    // Direct download tactical advice as PDF
+    document.getElementById('tactical-download-btn')?.addEventListener('click', async function() {
+        if (!window.lastTacticalAdvice) {
+            alert('Please generate tactical advice first.');
+            return;
+        }
+        this.disabled = true;
+        const originalText = this.textContent;
+        this.textContent = 'Preparing...';
+        try {
+            const res = await fetch('/api/download_tactical_pdf', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(window.lastTacticalAdvice)
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert('Error: ' + (err.error || res.statusText));
+                return;
+            }
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            // Attempt to parse filename from content-disposition
+            const disp = res.headers.get('content-disposition') || '';
+            let filename = 'tactical_card.pdf';
+            const m = /filename="?([^";]+)"?/.exec(disp);
+            if (m && m[1]) filename = m[1];
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error(err);
+            alert('Download failed');
+        } finally {
+            this.disabled = false;
+            this.textContent = originalText;
         }
     });
 </script>
