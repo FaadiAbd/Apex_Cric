@@ -18,6 +18,14 @@
                     <span class="material-icons text-lg">history</span>
                     History
                 </button>
+                <button type="button" id="nav-training">
+                    <span class="material-icons text-lg">fitness_center</span>
+                    Training Plan
+                </button>
+                <button type="button" id="nav-players">
+                    <span class="material-icons text-lg">person_add</span>
+                    Players
+                </button>
             </nav>
             <div class="app-sidebar-bottom">
                 <div class="app-sidebar-user">{{ user_name or user_email }}</div>
@@ -39,6 +47,19 @@
                             <p class="text-gray-300 mt-2">Get instant AI feedback on your action.</p>
                         </div>
                         <form class="space-y-6" id="analysis-form">
+                            <!-- Player Selection -->
+                            <div>
+                                <label class="block text-sm font-semibold mb-2 text-gray-300">Select Player (Optional)</label>
+                                <div class="flex gap-2">
+                                    <select id="player-select" class="flex-1 bg-slate-700/50 border border-cyan-500/30 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                        <option value="">Choose a player or create new</option>
+                                    </select>
+                                    <button type="button" onclick="window.location.href='/players'" class="px-4 py-2 bg-cyan-600/30 hover:bg-cyan-600/50 rounded-lg transition text-sm font-semibold">
+                                        <span class="material-icons text-lg">person_add</span>
+                                    </button>
+                                </div>
+                            </div>
+
                             <div class="text-center pt-4">
                                 <label class="cursor-pointer group" for="video-upload">
                                     <div class="w-40 h-40 mx-auto border-2 border-dashed border-gray-500 rounded-full flex flex-col items-center justify-center transition-all duration-300 hover:border-[var(--brand-glow)] hover:bg-white/5 upload-button-glow">
@@ -63,6 +84,33 @@
                         <ul id="history-list" class="history-list hidden"></ul>
                         <p id="history-empty" class="text-gray-500 text-sm p-4 hidden">No analyses yet. Upload a video to get started.</p>
                     </div>
+                </div>
+            </div>
+
+            <div id="training-pane" class="app-pane p-4 lg:p-8 hidden">
+                <div class="w-full max-w-2xl mx-auto">
+                    <h2 class="orbitron text-2xl font-bold text-[var(--neon-blue)] mb-6">Training Plan</h2>
+                    <form id="training-form" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Select Analysis</label>
+                            <select id="training-analysis" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Training Goal</label>
+                            <select id="training-goal" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                <option value="">Select goal</option>
+                                <option value="Speed Increase">Speed Increase</option>
+                                <option value="Injury Prevention">Injury Prevention</option>
+                                <option value="Accuracy Improvement">Accuracy Improvement</option>
+                                <option value="Power Development">Power Development</option>
+                                <option value="Endurance Building">Endurance Building</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="px-6 py-2 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-lg font-semibold hover:from-cyan-600 hover:to-cyan-700 transition">Generate Plan</button>
+                    </form>
+                    <div id="training-output" class="mt-6 p-4 bg-slate-800 rounded-lg text-sm whitespace-pre-wrap"></div>
                 </div>
             </div>
         </main>

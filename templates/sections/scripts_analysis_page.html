@@ -104,5 +104,22 @@
         });
         fullModeBtn.addEventListener('click', () => switchVideoMode('full'));
         skeletonModeBtn.addEventListener('click', () => switchVideoMode('skeleton'));
+
+        // Display player information if available
+        if (payload.player_name) {
+            const playerInfoSection = document.getElementById('player-info-section');
+            const playerDetails = document.getElementById('player-details');
+            playerInfoSection.style.display = 'block';
+            
+            let playerHTML = `<p><strong>Name:</strong> ${payload.player_name}</p>`;
+            if (payload.player_age) playerHTML += `<p><strong>Age:</strong> ${payload.player_age}</p>`;
+            if (payload.player_height) playerHTML += `<p><strong>Height:</strong> ${payload.player_height} cm</p>`;
+            if (payload.player_weight) playerHTML += `<p><strong>Weight:</strong> ${payload.player_weight} kg</p>`;
+            if (payload.player_bowling_arm) playerHTML += `<p><strong>Arm:</strong> ${payload.player_bowling_arm}</p>`;
+            if (payload.player_bowling_style) playerHTML += `<p><strong>Style:</strong> ${payload.player_bowling_style}</p>`;
+            if (payload.player_team) playerHTML += `<p><strong>Team:</strong> ${payload.player_team}</p>`;
+            
+            playerDetails.innerHTML = playerHTML;
+        }
     })();
 </script>

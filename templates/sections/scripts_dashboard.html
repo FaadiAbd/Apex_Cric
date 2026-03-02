@@ -3,21 +3,52 @@
         localStorage.removeItem('apex_cric_token');
     });
 
+    // simple markdown -> HTML converter for headings and bullet lists
+    function markdownToHtml(md) {
+        // escape
+        let html = md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        // headings ###
+        html = html.replace(/^###\s*(.*)$/gm, '<h3>$1</h3>');
+        // bullet lists
+        html = html.replace(/^-\s+(.*)$/gm, '<li>$1</li>');
+        // wrap list items in <ul>
+        html = html.replace(/(?:<li>.*<\/li>\s*)+/g, function(match) {
+            return '<ul>' + match + '</ul>';
+        });
+        // paragraphs
+        html = html.replace(/^(?!<h|<ul|<li)(.+)$/gm, '<p>$1</p>');
+        return html;
+    }
+
+
     const navAnalyse = document.getElementById('nav-analyse');
     const navHistory = document.getElementById('nav-history');
+    const navTraining = document.getElementById('nav-training');
+    const navPlayers = document.getElementById('nav-players');
     const analysePane = document.getElementById('analyse-pane');
     const historyPane = document.getElementById('history-pane');
+    const trainingPane = document.getElementById('training-pane');
     const historyListEl = document.getElementById('history-list');
     const historyLoading = document.getElementById('history-loading');
     const historyEmpty = document.getElementById('history-empty');
 
     function showPane(pane) {
         const isAnalyse = pane === 'analyse';
+        const isHistory = pane === 'history';
+        const isTraining = pane === 'training';
+        const isPlayers = pane === 'players';
+        
         if (analysePane) analysePane.classList.toggle('active', isAnalyse);
-        if (historyPane) historyPane.classList.toggle('active', !isAnalyse);
+        if (historyPane) historyPane.classList.toggle('active', isHistory);
+        if (trainingPane) trainingPane.classList.toggle('active', isTraining);
         if (navAnalyse) navAnalyse.classList.toggle('active', isAnalyse);
-        if (navHistory) navHistory.classList.toggle('active', !isAnalyse);
-        if (!isAnalyse) fetchAndRenderHistory();
+        if (navHistory) navHistory.classList.toggle('active', isHistory);
+        if (navTraining) navTraining.classList.toggle('active', isTraining);
+        if (navPlayers) navPlayers.classList.toggle('active', isPlayers);
+        
+        if (isHistory) fetchAndRenderHistory();
+        if (isTraining) loadTrainingAnalyses();
+        if (isPlayers) window.location.href = '/players';
     }
 
     function fetchAndRenderHistory() {
@@ -38,9 +69,10 @@
                     const dateStr = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'Unknown date';
                     const rawLabel = a.original_filename || `Analysis ${a.id}`;
                     const label = rawLabel.length > 35 ? rawLabel.slice(0, 32) + '...' : rawLabel;
+                    const playerInfo = a.player_name ? ` - ${a.player_name}` : '';
                     return `<li><a href="/analysis/${a.id}" class="block p-3 rounded-lg hover:bg-white/10 transition no-underline text-inherit">
                         <div class="history-item-date">${dateStr}</div>
-                        <div class="history-item-label">${label}</div>
+                        <div class="history-item-label">${label}${playerInfo}</div>
                     </a></li>`;
                 }).join('');
                 historyListEl.classList.remove('hidden');
@@ -52,41 +84,131 @@
             });
     }
 
+    async function loadPlayers() {
+        try {
+            const response = await fetch('/api/players', { method: 'GET' });
+            const data = await response.json();
+            const select = document.getElementById('player-select');
+            
+            if (data.ok && select) {
+                select.innerHTML = '<option value="">Choose a player or create new</option>';
+                if (data.players && data.players.length > 0) {
+                    data.players.forEach(player => {
+                        const option = document.createElement('option');
+                        option.value = player.id;
+                        option.textContent = player.name;
+                        select.appendChild(option);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error loading players:', error);
+        }
+    }
+
     if (navAnalyse) navAnalyse.addEventListener('click', () => showPane('analyse'));
     if (navHistory) navHistory.addEventListener('click', () => showPane('history'));
+    if (navTraining) navTraining.addEventListener('click', () => showPane('training'));
+    if (navPlayers) navPlayers.addEventListener('click', () => showPane('players'));
 
     const videoUploadInput = document.getElementById('video-upload');
     const processingModal = document.getElementById('processing-modal');
-    if (videoUploadInput) videoUploadInput.addEventListener('change', function() {
-        if (!this.files || !this.files.length) return;
-        document.getElementById('file-name-display').textContent = this.files[0].name;
-        document.getElementById('upload-container').classList.add('hidden');
-        processingModal.classList.remove('hidden');
+    if (videoUploadInput) {
+        videoUploadInput.addEventListener('change', function() {
+            if (!this.files || !this.files.length) return;
+            document.getElementById('file-name-display').textContent = this.files[0].name;
+            document.getElementById('upload-container').classList.add('hidden');
+            processingModal.classList.remove('hidden');
 
-        const formData = new FormData();
-        formData.append('video', this.files[0]);
+            const formData = new FormData();
+            formData.append('video', this.files[0]);
+            
+            const playerId = document.getElementById('player-select')?.value;
+            if (playerId) {
+                formData.append('player_id', playerId);
+            }
 
-        fetch('/analyze', { method: 'POST', body: formData })
-            .then(response => {
-                if (response.status === 401) { window.location.href = '/login'; return Promise.reject(new Error('Login required')); }
-                if (!response.ok) throw new Error(response.statusText);
-                return response.json();
-            })
-            .then(data => {
-                if (data.error) throw new Error(data.error);
-                if (data.analysis_id) {
-                    window.location.href = '/analysis/' + data.analysis_id;
-                    return;
-                }
-                processingModal.classList.add('hidden');
-                document.getElementById('upload-container').classList.remove('hidden');
-            })
-            .catch(error => {
-                if (error.message === 'Login required') return;
-                console.error('Error during analysis:', error);
-                alert('An error occurred. Please try again.');
-                processingModal.classList.add('hidden');
-                document.getElementById('upload-container').classList.remove('hidden');
+            fetch('/analyze', { method: 'POST', body: formData })
+                .then(response => {
+                    if (response.status === 401) { window.location.href = '/login'; return Promise.reject(new Error('Login required')); }
+                    if (!response.ok) throw new Error(response.statusText);
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    if (data.analysis_id) {
+                        window.location.href = '/analysis/' + data.analysis_id;
+                        return;
+                    }
+                    processingModal.classList.add('hidden');
+                    document.getElementById('upload-container').classList.remove('hidden');
+                })
+                .catch(error => {
+                    if (error.message === 'Login required') return;
+                    console.error('Error during analysis:', error);
+                    alert('An error occurred. Please try again.');
+                    processingModal.classList.add('hidden');
+                    document.getElementById('upload-container').classList.remove('hidden');
+                });
+        });
+    }
+
+    // Load players on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        loadPlayers();
+        // also prepare training pane if visible
+        loadTrainingAnalyses();
+    });
+
+    async function loadTrainingAnalyses() {
+        try {
+            const response = await fetch('/api/history');
+            const data = await response.json();
+            const sel = document.getElementById('training-analysis');
+            if (!sel) return;
+            sel.innerHTML = '<option value="">Select an analysis</option>';
+            if (data.analyses && data.analyses.length) {
+                data.analyses.forEach(a => {
+                    const opt = document.createElement('option');
+                    opt.value = a.id;
+                    const dateStr = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'Unknown';
+                    opt.textContent = `${dateStr} — ${a.original_filename || 'Video'}`;
+                    sel.appendChild(opt);
+                });
+            } else {
+                sel.innerHTML = '<option value="">No analyses available</option>';
+            }
+        } catch (err) {
+            console.error('Error loading analyses for training:', err);
+        }
+    }
+
+    document.getElementById('training-form')?.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const analysisId = document.getElementById('training-analysis').value;
+        const goal = document.getElementById('training-goal').value;
+        if (!analysisId || !goal) {
+            alert('Please choose an analysis and goal.');
+            return;
+        }
+        const out = document.getElementById('training-output');
+        out.textContent = 'Generating plan...';
+        try {
+            const res = await fetch('/api/training_plan', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({analysis_id: analysisId, goal})
             });
+            const data = await res.json();
+            if (data.ok) {
+                // convert simple markdown to HTML
+                out.innerHTML = markdownToHtml(data.plan);
+            } else {
+                out.textContent = 'Error: ' + (data.error || 'unknown');
+            }
+        } catch (err) {
+            out.textContent = 'Request failed';
+            console.error(err);
+        }
     });
 </script>
