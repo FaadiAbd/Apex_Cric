@@ -18,6 +18,10 @@
                     <span class="material-icons text-lg">history</span>
                     History
                 </button>
+                <button type="button" id="nav-players">
+                    <span class="material-icons text-lg">person_add</span>
+                    Players
+                </button>
             </nav>
             <div class="app-sidebar-bottom">
                 <div class="app-sidebar-user">{{ user_name or user_email }}</div>
@@ -39,6 +43,19 @@
                             <p class="text-gray-300 mt-2">Get instant AI feedback on your action.</p>
                         </div>
                         <form class="space-y-6" id="analysis-form">
+                            <!-- Player Selection -->
+                            <div>
+                                <label class="block text-sm font-semibold mb-2 text-gray-300">Select Player (Optional)</label>
+                                <div class="flex gap-2">
+                                    <select id="player-select" class="flex-1 bg-slate-700/50 border border-cyan-500/30 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/80 transition">
+                                        <option value="">Choose a player or create new</option>
+                                    </select>
+                                    <button type="button" onclick="window.location.href='/players'" class="px-4 py-2 bg-cyan-600/30 hover:bg-cyan-600/50 rounded-lg transition text-sm font-semibold">
+                                        <span class="material-icons text-lg">person_add</span>
+                                    </button>
+                                </div>
+                            </div>
+
                             <div class="text-center pt-4">
                                 <label class="cursor-pointer group" for="video-upload">
                                     <div class="w-40 h-40 mx-auto border-2 border-dashed border-gray-500 rounded-full flex flex-col items-center justify-center transition-all duration-300 hover:border-[var(--brand-glow)] hover:bg-white/5 upload-button-glow">

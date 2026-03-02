@@ -15,6 +15,10 @@
                     <span class="material-icons text-lg">history</span>
                     History
                 </a>
+                <a href="/players" class="flex items-center gap-3 w-full py-2.5 px-5 text-left text-gray-300 hover:bg-white/10 hover:text-white rounded-none border-none">
+                    <span class="material-icons text-lg">person_add</span>
+                    Players
+                </a>
             </nav>
             <div class="app-sidebar-bottom">
                 <div class="app-sidebar-user">{{ user_name or user_email }}</div>
@@ -57,7 +61,14 @@
                     </div>
                 </div>
 
-                <aside class="analysis-metrics glassmorphic-analysis rounded-xl p-4 lg:w-64 shrink-0 flex flex-col min-h-0">
+                <aside class="analysis-metrics glassmorphic-analysis rounded-xl p-4 lg:w-72 shrink-0 flex flex-col min-h-0">
+                    <div id="player-info-section" style="display: none;" class="mb-6 pb-6 border-b border-cyan-500/30">
+                        <h2 class="orbitron text-lg font-bold mb-3 text-[var(--neon-blue)] shrink-0">PLAYER PROFILE</h2>
+                        <div id="player-details" class="space-y-2 text-sm text-gray-300 shrink-0">
+                            <!-- Player details will be inserted here -->
+                        </div>
+                    </div>
+
                     <h2 class="orbitron text-lg font-bold mb-3 text-[var(--neon-blue)] shrink-0">REAL-TIME METRICS</h2>
                     <div id="metrics-container" class="space-y-3 shrink-0">
                         <div class="flex justify-between items-center"><span class="font-semibold text-gray-300 text-sm">Elbow Angle</span><span class="orbitron font-bold text-xl text-white" id="elbow-angle">...</span></div>
