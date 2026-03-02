@@ -1,0 +1,308 @@
+{% include 'base.html' %}
+
+<body class="bg-gradient-to-b from-gray-900 via-slate-800 to-slate-900 text-white" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%); min-height: 100vh;">
+    <!-- Navigation Bar -->
+    <nav class="bg-black/40 backdrop-blur-md border-b border-cyan-500/30 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <span class="material-icons text-2xl" style="color: #19faaa;">sports_cricket</span>
+                <h1 class="text-2xl font-orbitron font-bold" style="color: #19faaa;">BowlForm AI</h1>
+            </div>
+            <div class="flex gap-4 items-center">
+                <a href="{{ url_for('dashboard') }}" class="px-4 py-2 rounded-lg hover:bg-cyan-900/50 transition">Dashboard</a>
+                <a href="{{ url_for('profile') }}" class="px-4 py-2 rounded-lg hover:bg-cyan-900/50 transition">Profile</a>
+                <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-lg hover:bg-red-900/50 transition">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <!-- Header Section -->
+        <div class="mb-8">
+            <h2 class="text-4xl font-orbitron font-bold mb-2" style="color: #19faaa;">Player Profiles</h2>
+            <p class="text-gray-400">Manage your cricket player profiles</p>
+        </div>
+
+        <!-- Create New Player Button -->
+        <button onclick="openCreatePlayerModal()" class="mb-6 px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-lg font-semibold hover:from-cyan-600 hover:to-cyan-700 transition upload-button-glow">
+            <span class="material-icons inline mr-2">add</span>Create New Player
+        </button>
+
+        <!-- Players Grid -->
+        <div id="playersContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Players will be loaded here -->
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="text-center py-12">
+            <span class="material-icons text-6xl mx-auto mb-4 text-gray-600">person_outline</span>
+            <p class="text-gray-400 text-lg">No players yet. Create your first player profile!</p>
+        </div>
+    </div>
+
+    <!-- Create/Edit Player Modal -->
+    <div id="playerModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur flex items-center justify-center z-50 p-4">
+        <div class="bg-slate-800 rounded-xl p-6 max-w-md w-full border border-cyan-500/30 max-h-[90vh] overflow-y-auto">
+            <h3 class="text-2xl font-orbitron font-bold mb-6 sticky top-0 bg-slate-800 pt-2" style="color: #19faaa;">Player Profile</h3>
+            
+            <form id="playerForm" onsubmit="savePlayer(event)" class="space-y-4">
+                <input type="hidden" id="playerId" value="">
+                
+                <!-- Player Photo -->
+                <div>
+                    <label class="block text-sm font-semibold mb-2">Player Photo</label>
+                    <div class="relative">
+                        <input type="file" id="playerPhoto" accept="image/*" class="hidden" onchange="previewPhoto()">
+                        <button type="button" onclick="document.getElementById('playerPhoto').click()" 
+                                class="w-full border-2 border-dashed border-cyan-500/50 rounded-lg py-4 flex flex-col items-center justify-center cursor-pointer hover:border-cyan-500/80 transition">
+                            <span class="material-icons text-2xl mb-1" style="color: #19faaa;">camera_alt</span>
+                            <span class="text-xs text-gray-400">Click to upload photo</span>
+                        </button>
+                        <img id="photoPreview" class="hidden mt-2 rounded-lg w-full h-24 object-contain">
+                    </div>
+                </div>
+
+                <!-- Name -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Name *</label>
+                    <input type="text" id="playerName" required class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                </div>
+
+                <!-- Age -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Age</label>
+                    <input type="number" id="playerAge" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                </div>
+
+                <!-- Height -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Height (cm)</label>
+                    <input type="number" id="playerHeight" step="0.1" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                </div>
+
+                <!-- Weight -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Weight (kg)</label>
+                    <input type="number" id="playerWeight" step="0.1" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                </div>
+
+                <!-- Bowling Arm -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Bowling Arm</label>
+                    <select id="playerBowlingArm" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                        <option value="">Select</option>
+                        <option value="Right">Right-arm</option>
+                        <option value="Left">Left-arm</option>
+                    </select>
+                </div>
+
+                <!-- Bowling Style -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Bowling Style</label>
+                    <select id="playerBowlingStyle" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                        <option value="">Select</option>
+                        <option value="Fast">Fast</option>
+                        <option value="Medium">Medium</option>
+                        <option value="Spin">Spin</option>
+                        <option value="Leg Spin">Leg Spin</option>
+                        <option value="Off Spin">Off Spin</option>
+                    </select>
+                </div>
+
+                <!-- Team Name -->
+                <div>
+                    <label class="block text-sm font-semibold mb-1">Team Name</label>
+                    <input type="text" id="playerTeam" class="w-full bg-slate-700/50 border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/80 transition">
+                </div>
+
+                <!-- Form Actions -->
+                <div class="flex gap-2 pt-2 sticky bottom-0 bg-slate-800">
+                    <button type="submit" class="flex-1 px-3 py-2 text-sm bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-lg font-semibold hover:from-cyan-600 hover:to-cyan-700 transition">
+                        Save Player
+                    </button>
+                    <button type="button" onclick="closePlayerModal()" class="flex-1 px-3 py-2 text-sm bg-slate-700 rounded-lg font-semibold hover:bg-slate-600 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let isEditingPlayer = false;
+        let currentPlayerId = null;
+
+        // Load players on page load
+        document.addEventListener('DOMContentLoaded', loadPlayers);
+
+        function openCreatePlayerModal() {
+            isEditingPlayer = false;
+            currentPlayerId = null;
+            document.getElementById('playerForm').reset();
+            document.getElementById('photoPreview').classList.add('hidden');
+            document.getElementById('playerModal').classList.remove('hidden');
+        }
+
+        function closePlayerModal() {
+            document.getElementById('playerModal').classList.add('hidden');
+            document.getElementById('playerForm').reset();
+        }
+
+        function previewPhoto() {
+            const file = document.getElementById('playerPhoto').files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const preview = document.getElementById('photoPreview');
+                    preview.src = e.target.result;
+                    preview.classList.remove('hidden');
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        async function loadPlayers() {
+            try {
+                const response = await fetch('/api/players', { method: 'GET' });
+                const data = await response.json();
+                
+                if (data.ok && data.players.length > 0) {
+                    displayPlayers(data.players);
+                    document.getElementById('emptyState').classList.add('hidden');
+                } else {
+                    document.getElementById('playersContainer').innerHTML = '';
+                    document.getElementById('emptyState').classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Error loading players:', error);
+            }
+        }
+
+        function displayPlayers(players) {
+            const container = document.getElementById('playersContainer');
+            container.innerHTML = players.map(player => `
+                <div class="glassmorphic p-6 hover:border-cyan-500/60 transition">
+                    ${player.photo_filename ? `
+                        <!-- use object-contain so entire face appears, limit max-height -->
+                        <img src="/uploads/${player.photo_filename}" alt="${player.name}" class="w-full max-h-40 object-contain rounded-lg mb-4">
+                    ` : `
+                        <div class="w-full h-40 bg-slate-700 rounded-lg mb-4 flex items-center justify-center">
+                            <span class="material-icons text-4xl text-gray-600">account_circle</span>
+                        </div>
+                    `}
+                    
+                    <h3 class="text-xl font-bold mb-2">${player.name}</h3>
+                    
+                    <div class="space-y-1 text-sm text-gray-400 mb-4">
+                        ${player.age ? `<p><strong>Age:</strong> ${player.age}</p>` : ''}
+                        ${player.height ? `<p><strong>Height:</strong> ${player.height} cm</p>` : ''}
+                        ${player.weight ? `<p><strong>Weight:</strong> ${player.weight} kg</p>` : ''}
+                        ${player.bowling_arm ? `<p><strong>Arm:</strong> ${player.bowling_arm}</p>` : ''}
+                        ${player.bowling_style ? `<p><strong>Style:</strong> ${player.bowling_style}</p>` : ''}
+                        ${player.team_name ? `<p><strong>Team:</strong> ${player.team_name}</p>` : ''}
+                    </div>
+
+                    <div class="flex gap-2">
+                        <button onclick="editPlayer(${player.id})" class="flex-1 px-3 py-2 bg-cyan-600/30 hover:bg-cyan-600/50 rounded transition text-sm">
+                            <span class="material-icons inline text-sm mr-1">edit</span>Edit
+                        </button>
+                        <button onclick="deletePlayer(${player.id})" class="flex-1 px-3 py-2 bg-red-600/30 hover:bg-red-600/50 rounded transition text-sm">
+                            <span class="material-icons inline text-sm mr-1">delete</span>Delete
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function editPlayer(playerId) {
+            try {
+                const response = await fetch(`/api/players/${playerId}`, { method: 'GET' });
+                const data = await response.json();
+                
+                if (data.ok) {
+                    const player = data.player;
+                    isEditingPlayer = true;
+                    currentPlayerId = playerId;
+                    
+                    document.getElementById('playerId').value = playerId;
+                    document.getElementById('playerName').value = player.name || '';
+                    document.getElementById('playerAge').value = player.age || '';
+                    document.getElementById('playerHeight').value = player.height || '';
+                    document.getElementById('playerWeight').value = player.weight || '';
+                    document.getElementById('playerBowlingArm').value = player.bowling_arm || '';
+                    document.getElementById('playerBowlingStyle').value = player.bowling_style || '';
+                    document.getElementById('playerTeam').value = player.team_name || '';
+                    
+                    if (player.photo_filename) {
+                        const preview = document.getElementById('photoPreview');
+                        preview.src = `/uploads/${player.photo_filename}`;
+                        preview.classList.remove('hidden');
+                    }
+                    
+                    document.getElementById('playerModal').classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Error loading player:', error);
+            }
+        }
+
+        async function savePlayer(event) {
+            event.preventDefault();
+            
+            const formData = new FormData();
+            const playerId = document.getElementById('playerId').value;
+            
+            formData.append('name', document.getElementById('playerName').value);
+            formData.append('age', document.getElementById('playerAge').value);
+            formData.append('height', document.getElementById('playerHeight').value);
+            formData.append('weight', document.getElementById('playerWeight').value);
+            formData.append('bowling_arm', document.getElementById('playerBowlingArm').value);
+            formData.append('bowling_style', document.getElementById('playerBowlingStyle').value);
+            formData.append('team_name', document.getElementById('playerTeam').value);
+            
+            const photoFile = document.getElementById('playerPhoto').files[0];
+            if (photoFile) {
+                formData.append('photo', photoFile);
+            }
+            
+            try {
+                const url = playerId ? `/api/players/${playerId}` : '/api/players';
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                if (data.ok) {
+                    closePlayerModal();
+                    loadPlayers();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error saving player:', error);
+                alert('Error saving player');
+            }
+        }
+
+        async function deletePlayer(playerId) {
+            if (confirm('Are you sure you want to delete this player?')) {
+                try {
+                    const response = await fetch(`/api/players/${playerId}`, { method: 'DELETE' });
+                    const data = await response.json();
+                    
+                    if (data.ok) {
+                        loadPlayers();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                } catch (error) {
+                    console.error('Error deleting player:', error);
+                    alert('Error deleting player');
+                }
+            }
+        }
+    </script>
+</body>
+</html>

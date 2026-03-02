@@ -11,7 +11,16 @@
         ai_feedback: {{ (analysis.ai_feedback or '')|tojson }},
         video_dimensions: { width: {{ analysis.video_width or 0 }}, height: {{ analysis.video_height or 0 }} },
         fps: {{ analysis.fps or 30 }},
-        frame_data: {{ (analysis.frame_data or [])|tojson }}
+        frame_data: {{ (analysis.frame_data or [])|tojson }},
+        player_id: {{ (analysis.player_id or 0)|tojson }},
+        player_name: {{ (analysis.player_name or '')|tojson }},
+        player_age: {{ (analysis.age or 0)|tojson }},
+        player_height: {{ (analysis.height or 0)|tojson }},
+        player_weight: {{ (analysis.weight or 0)|tojson }},
+        player_bowling_arm: {{ (analysis.bowling_arm or '')|tojson }},
+        player_bowling_style: {{ (analysis.bowling_style or '')|tojson }},
+        player_team: {{ (analysis.team_name or '')|tojson }},
+        player_photo: {{ (analysis.photo_filename or '')|tojson }}
     };
 </script>
 {% include "sections/scripts_analysis_page.html" %}
