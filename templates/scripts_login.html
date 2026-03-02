@@ -1,0 +1,60 @@
+<script>
+    const AUTH_TOKEN_KEY = 'apex_cric_token';
+
+    const authTabLogin = document.getElementById('auth-tab-login');
+    const authTabSignup = document.getElementById('auth-tab-signup');
+    const authPanelLogin = document.getElementById('auth-panel-login');
+    const authPanelSignup = document.getElementById('auth-panel-signup');
+    function showAuthPanel(panel) {
+        const isLogin = panel === 'login';
+        authPanelLogin.classList.toggle('hidden', !isLogin);
+        authPanelSignup.classList.toggle('hidden', isLogin);
+        authTabLogin.classList.toggle('active', isLogin);
+        authTabSignup.classList.toggle('active', !isLogin);
+    }
+    if (authTabLogin) authTabLogin.addEventListener('click', () => showAuthPanel('login'));
+    if (authTabSignup) authTabSignup.addEventListener('click', () => showAuthPanel('signup'));
+
+    const loginForm = document.getElementById('login-form');
+    const signupForm = document.getElementById('signup-form');
+    if (loginForm) loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const errEl = document.getElementById('login-error');
+        errEl.classList.add('hidden');
+        const res = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: loginForm.email.value, password: loginForm.password.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) {
+            if (data.token) localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+            window.location.href = '/dashboard'; return;
+        }
+        errEl.textContent = data.error || 'Login failed.'; errEl.classList.remove('hidden');
+    });
+    if (signupForm) signupForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const errEl = document.getElementById('signup-error');
+        errEl.classList.add('hidden');
+        const res = await fetch('/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: signupForm.email.value, password: signupForm.password.value, name: signupForm.name.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) {
+            if (data.token) localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+            window.location.href = '/dashboard'; return;
+        }
+        errEl.textContent = data.error || 'Sign up failed.'; errEl.classList.remove('hidden');
+    });
+
+    // On login page load: if we have a stored token, restore session so we don't need to log in again after server restart
+    (function tryRestoreSession() {
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        if (!token) return;
+        fetch('/api/session/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: token }) })
+            .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+            .then(function(result) {
+                if (result.ok && result.data.ok) {
+                    window.location.href = '/dashboard';
+                } else {
+                    localStorage.removeItem(AUTH_TOKEN_KEY);
+                }
+            })
+            .catch(function() { localStorage.removeItem(AUTH_TOKEN_KEY); });
+    })();
+</script>

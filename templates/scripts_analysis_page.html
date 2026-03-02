@@ -1,0 +1,125 @@
+<script>
+    document.getElementById('logout-link')?.addEventListener('click', function() {
+        localStorage.removeItem('apex_cric_token');
+    });
+
+    (function() {
+        const payload = window.__ANALYSIS_PAYLOAD__;
+        if (!payload) return;
+
+        const videoPlayer = document.getElementById('analysis-video');
+        const fullModeBtn = document.getElementById('full-mode-btn');
+        const skeletonModeBtn = document.getElementById('skeleton-mode-btn');
+        const downloadBtn = document.getElementById('download-btn');
+
+        let frameData = payload.frame_data || [];
+        let videoFPS = payload.fps || 30;
+        let videoUrlFull = payload.output_video_full_url || '';
+        let videoUrlSkeleton = payload.output_video_skeleton_url || '';
+        let currentMode = 'full';
+
+        function updateMetricsDisplay(metrics) {
+            document.getElementById('elbow-angle').textContent = metrics?.elbow_angle ? `${metrics.elbow_angle}°` : 'N/A';
+            document.getElementById('knee-angle').textContent = metrics?.front_knee_angle ? `${metrics.front_knee_angle}°` : 'N/A';
+            document.getElementById('arm-verticality').textContent = metrics?.arm_verticality ? `${metrics.arm_verticality}°` : 'N/A';
+            document.getElementById('stride-length').textContent = metrics?.stride_length ? `${metrics.stride_length}x` : 'N/A';
+        }
+
+        function refreshMetricsFromVideoTime() {
+            const t = videoPlayer.currentTime;
+            const frameNumber = Math.floor(t * videoFPS);
+            if (frameData && frameData.length && frameNumber >= 0 && frameNumber < frameData.length) {
+                const frameMetrics = frameData[frameNumber];
+                updateMetricsDisplay(frameMetrics && typeof frameMetrics === 'object' ? frameMetrics : null);
+            } else if (payload.release_features && Object.keys(payload.release_features).length) {
+                updateMetricsDisplay(payload.release_features);
+            } else {
+                updateMetricsDisplay(null);
+            }
+        }
+
+        function tick() {
+            if (!videoPlayer.paused && !videoPlayer.ended) {
+                refreshMetricsFromVideoTime();
+            }
+            if (!videoPlayer.ended) {
+                requestAnimationFrame(tick);
+            }
+        }
+
+        function switchVideoMode(mode) {
+            if (currentMode === mode && videoPlayer.src) return;
+            const currentTime = videoPlayer.currentTime;
+            const isPlaying = !videoPlayer.paused;
+            currentMode = mode;
+            const newSrc = (mode === 'full') ? videoUrlFull : videoUrlSkeleton;
+            videoPlayer.src = newSrc;
+            videoPlayer.load();
+            videoPlayer.addEventListener('loadeddata', () => {
+                videoPlayer.currentTime = currentTime;
+                if (isPlaying) videoPlayer.play().catch(() => {});
+            }, { once: true });
+            fullModeBtn.classList.toggle('active', mode === 'full');
+            skeletonModeBtn.classList.toggle('active', mode === 'skeleton');
+            downloadBtn.href = newSrc;
+            downloadBtn.setAttribute('download', `bowling_analysis_${mode}_${new Date().toISOString().split('T')[0]}.mp4`);
+        }
+
+        const videoContainer = document.getElementById('analysis-video-container');
+        if (payload.video_dimensions && payload.video_dimensions.width > 0) {
+            videoContainer.style.aspectRatio = payload.video_dimensions.width / payload.video_dimensions.height;
+        } else {
+            videoContainer.style.aspectRatio = '16 / 9';
+        }
+
+        updateMetricsDisplay(payload.release_features);
+        switchVideoMode('full');
+        videoPlayer.src = videoUrlFull;
+
+        const feedbackContainer = document.getElementById('ai-feedback-container');
+        feedbackContainer.innerHTML = '';
+        const tips = (payload.ai_feedback || '').split('\n').filter(tip => tip.trim().startsWith('-'));
+        if (tips.length > 0) {
+            const ul = document.createElement('ul');
+            ul.className = 'list-disc list-inside space-y-2 text-gray-200';
+            tips.forEach(tip => {
+                const li = document.createElement('li');
+                li.textContent = tip.replace(/^-/, '').trim();
+                ul.appendChild(li);
+            });
+            feedbackContainer.appendChild(ul);
+        } else {
+            feedbackContainer.innerHTML = `<p class="text-gray-300">${payload.ai_feedback || ''}</p>`;
+        }
+
+        videoPlayer.addEventListener('timeupdate', refreshMetricsFromVideoTime);
+        videoPlayer.addEventListener('pause', refreshMetricsFromVideoTime);
+        videoPlayer.addEventListener('seeked', refreshMetricsFromVideoTime);
+        videoPlayer.addEventListener('play', function startTick() {
+            requestAnimationFrame(tick);
+        });
+        videoPlayer.addEventListener('loadeddata', function() {
+            refreshMetricsFromVideoTime();
+            if (!videoPlayer.paused) requestAnimationFrame(tick);
+        });
+        fullModeBtn.addEventListener('click', () => switchVideoMode('full'));
+        skeletonModeBtn.addEventListener('click', () => switchVideoMode('skeleton'));
+
+        // Display player information if available
+        if (payload.player_name) {
+            const playerInfoSection = document.getElementById('player-info-section');
+            const playerDetails = document.getElementById('player-details');
+            playerInfoSection.style.display = 'block';
+            
+            let playerHTML = `<p><strong>Name:</strong> ${payload.player_name}</p>`;
+            if (payload.player_age) playerHTML += `<p><strong>Age:</strong> ${payload.player_age}</p>`;
+            if (payload.player_height) playerHTML += `<p><strong>Height:</strong> ${payload.player_height} cm</p>`;
+            if (payload.player_weight) playerHTML += `<p><strong>Weight:</strong> ${payload.player_weight} kg</p>`;
+            if (payload.player_bowling_arm) playerHTML += `<p><strong>Arm:</strong> ${payload.player_bowling_arm}</p>`;
+            if (payload.player_bowling_style) playerHTML += `<p><strong>Style:</strong> ${payload.player_bowling_style}</p>`;
+            if (payload.player_team) playerHTML += `<p><strong>Team:</strong> ${payload.player_team}</p>`;
+            
+            playerDetails.innerHTML = playerHTML;
+        }
+    })();
+</script>

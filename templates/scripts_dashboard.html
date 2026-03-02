@@ -1,0 +1,133 @@
+<script>
+    document.getElementById('logout-link')?.addEventListener('click', function() {
+        localStorage.removeItem('apex_cric_token');
+    });
+
+    const navAnalyse = document.getElementById('nav-analyse');
+    const navHistory = document.getElementById('nav-history');
+    const navPlayers = document.getElementById('nav-players');
+    const analysePane = document.getElementById('analyse-pane');
+    const historyPane = document.getElementById('history-pane');
+    const historyListEl = document.getElementById('history-list');
+    const historyLoading = document.getElementById('history-loading');
+    const historyEmpty = document.getElementById('history-empty');
+
+    function showPane(pane) {
+        const isAnalyse = pane === 'analyse';
+        const isHistory = pane === 'history';
+        const isPlayers = pane === 'players';
+        
+        if (analysePane) analysePane.classList.toggle('active', isAnalyse);
+        if (historyPane) historyPane.classList.toggle('active', isHistory);
+        if (navAnalyse) navAnalyse.classList.toggle('active', isAnalyse);
+        if (navHistory) navHistory.classList.toggle('active', isHistory);
+        if (navPlayers) navPlayers.classList.toggle('active', isPlayers);
+        
+        if (isHistory) fetchAndRenderHistory();
+        if (isPlayers) window.location.href = '/players';
+    }
+
+    function fetchAndRenderHistory() {
+        if (!historyListEl || !historyLoading || !historyEmpty) return;
+        historyLoading.classList.remove('hidden');
+        historyListEl.classList.add('hidden');
+        historyEmpty.classList.add('hidden');
+        fetch('/api/history')
+            .then(r => r.json())
+            .then(data => {
+                historyLoading.classList.add('hidden');
+                const list = data.analyses || [];
+                if (list.length === 0) {
+                    historyEmpty.classList.remove('hidden');
+                    return;
+                }
+                historyListEl.innerHTML = list.map(a => {
+                    const dateStr = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'Unknown date';
+                    const rawLabel = a.original_filename || `Analysis ${a.id}`;
+                    const label = rawLabel.length > 35 ? rawLabel.slice(0, 32) + '...' : rawLabel;
+                    const playerInfo = a.player_name ? ` - ${a.player_name}` : '';
+                    return `<li><a href="/analysis/${a.id}" class="block p-3 rounded-lg hover:bg-white/10 transition no-underline text-inherit">
+                        <div class="history-item-date">${dateStr}</div>
+                        <div class="history-item-label">${label}${playerInfo}</div>
+                    </a></li>`;
+                }).join('');
+                historyListEl.classList.remove('hidden');
+            })
+            .catch(() => {
+                historyLoading.classList.add('hidden');
+                historyEmpty.classList.remove('hidden');
+                historyEmpty.textContent = 'Could not load history.';
+            });
+    }
+
+    async function loadPlayers() {
+        try {
+            const response = await fetch('/api/players', { method: 'GET' });
+            const data = await response.json();
+            const select = document.getElementById('player-select');
+            
+            if (data.ok && select) {
+                select.innerHTML = '<option value="">Choose a player or create new</option>';
+                if (data.players && data.players.length > 0) {
+                    data.players.forEach(player => {
+                        const option = document.createElement('option');
+                        option.value = player.id;
+                        option.textContent = player.name;
+                        select.appendChild(option);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error loading players:', error);
+        }
+    }
+
+    if (navAnalyse) navAnalyse.addEventListener('click', () => showPane('analyse'));
+    if (navHistory) navHistory.addEventListener('click', () => showPane('history'));
+    if (navPlayers) navPlayers.addEventListener('click', () => showPane('players'));
+
+    const videoUploadInput = document.getElementById('video-upload');
+    const processingModal = document.getElementById('processing-modal');
+    if (videoUploadInput) {
+        videoUploadInput.addEventListener('change', function() {
+            if (!this.files || !this.files.length) return;
+            document.getElementById('file-name-display').textContent = this.files[0].name;
+            document.getElementById('upload-container').classList.add('hidden');
+            processingModal.classList.remove('hidden');
+
+            const formData = new FormData();
+            formData.append('video', this.files[0]);
+            
+            const playerId = document.getElementById('player-select')?.value;
+            if (playerId) {
+                formData.append('player_id', playerId);
+            }
+
+            fetch('/analyze', { method: 'POST', body: formData })
+                .then(response => {
+                    if (response.status === 401) { window.location.href = '/login'; return Promise.reject(new Error('Login required')); }
+                    if (!response.ok) throw new Error(response.statusText);
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    if (data.analysis_id) {
+                        window.location.href = '/analysis/' + data.analysis_id;
+                        return;
+                    }
+                    processingModal.classList.add('hidden');
+                    document.getElementById('upload-container').classList.remove('hidden');
+                })
+                .catch(error => {
+                    if (error.message === 'Login required') return;
+                    console.error('Error during analysis:', error);
+                    alert('An error occurred. Please try again.');
+                    processingModal.classList.add('hidden');
+                    document.getElementById('upload-container').classList.remove('hidden');
+                });
+        });
+    }
+
+    // Load players on page load
+    document.addEventListener('DOMContentLoaded', loadPlayers);
+</script>

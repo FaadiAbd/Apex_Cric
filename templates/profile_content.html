@@ -1,0 +1,69 @@
+<div class="screen-overlay bg-gradient-to-br from-[#0d1117] to-[#101d23] flex flex-col h-full overflow-hidden">
+    <div class="flex w-full flex-1 min-h-0">
+        <aside class="app-sidebar">
+            <div class="app-sidebar-logo">
+                <svg class="h-8 w-8 text-[var(--neon-blue)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                <h1 class="text-xl orbitron font-bold tracking-wider">BowlForm AI</h1>
+            </div>
+            <nav class="app-sidebar-nav">
+                <a href="/dashboard" class="flex items-center gap-3 w-full py-2.5 px-5 text-left text-gray-300 hover:bg-white/10 hover:text-white rounded-none border-none no-underline">
+                    <span class="material-icons text-lg">analytics</span>
+                    Analyse
+                </a>
+                <a href="/dashboard" class="flex items-center gap-3 w-full py-2.5 px-5 text-left text-gray-300 hover:bg-white/10 hover:text-white rounded-none border-none no-underline">
+                    <span class="material-icons text-lg">history</span>
+                    History
+                </a>
+            </nav>
+            <div class="app-sidebar-bottom">
+                <div class="app-sidebar-user">{{ user_name or user_email }}</div>
+                <a href="/profile" class="pill-button pill-button-secondary text-sm flex items-center justify-center gap-2 mb-2 w-full">
+                    <span class="material-icons text-lg">person</span>
+                    Edit Profile
+                </a>
+                <a href="/logout" class="pill-button text-sm flex items-center justify-center gap-2 w-full" id="logout-link">Logout</a>
+            </div>
+        </aside>
+
+        <main class="app-main flex-1 min-h-0 flex flex-col overflow-hidden">
+            <header class="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <h2 class="orbitron text-lg font-bold text-white">Edit Profile</h2>
+                <a href="/dashboard" class="pill-button text-sm flex items-center gap-2">
+                    <span class="material-icons text-lg">arrow_back</span>
+                    Back
+                </a>
+            </header>
+
+            <div class="flex-1 overflow-auto p-4 lg:p-8">
+                <div class="w-full max-w-md mx-auto">
+                    <form id="profile-form" class="glassmorphic rounded-2xl p-6 space-y-5">
+                        <div>
+                            <label for="profile-name" class="block text-sm font-medium text-gray-300 mb-1">Name</label>
+                            <input type="text" id="profile-name" name="name" value="{{ user_name or '' }}" placeholder="Your name"
+                                class="w-full px-4 py-3 rounded-lg bg-white/5 border border-gray-500 text-white placeholder-gray-400 focus:border-[var(--brand-glow)] focus:ring-1 focus:ring-[var(--brand-glow)] outline-none"/>
+                        </div>
+                        <div>
+                            <label for="profile-email" class="block text-sm font-medium text-gray-300 mb-1">Email</label>
+                            <input type="email" id="profile-email" name="email" value="{{ user_email or '' }}" required placeholder="Email"
+                                class="w-full px-4 py-3 rounded-lg bg-white/5 border border-gray-500 text-white placeholder-gray-400 focus:border-[var(--brand-glow)] focus:ring-1 focus:ring-[var(--brand-glow)] outline-none"/>
+                        </div>
+                        <div class="pt-2 border-t border-white/10">
+                            <p class="text-sm text-gray-400 mb-3">Change password (leave blank to keep current)</p>
+                            <div class="space-y-3">
+                                <input type="password" id="profile-current-password" name="current_password" placeholder="Current password"
+                                    class="w-full px-4 py-3 rounded-lg bg-white/5 border border-gray-500 text-white placeholder-gray-400 focus:border-[var(--brand-glow)] focus:ring-1 focus:ring-[var(--brand-glow)] outline-none"/>
+                                <input type="password" id="profile-new-password" name="new_password" placeholder="New password (min 6 characters)"
+                                    class="w-full px-4 py-3 rounded-lg bg-white/5 border border-gray-500 text-white placeholder-gray-400 focus:border-[var(--brand-glow)] focus:ring-1 focus:ring-[var(--brand-glow)] outline-none"/>
+                            </div>
+                        </div>
+                        <p id="profile-error" class="text-red-400 text-sm hidden"></p>
+                        <p id="profile-success" class="text-[var(--brand-glow)] text-sm hidden">Profile updated.</p>
+                        <button type="submit" class="w-full py-3 rounded-lg font-bold text-white bg-[var(--neon-blue)] hover:opacity-90 transition-opacity">
+                            Save changes
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
