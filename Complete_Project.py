@@ -528,6 +528,30 @@ Format the output as a simple list. Example:
 - Follow through fully towards the target.
 """
 
+    # send the prompt to OpenRouter (DeepSeek) similar to training plan
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5000",
+        "X-Title": "ApexCric"
+    }
+    data = {
+        "model": MODEL_ID,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+    try:
+        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data, timeout=30)
+        if res.status_code == 200:
+            reply = res.json()["choices"][0]["message"]["content"]
+            return reply.strip()
+        else:
+            error_message = f"API error {res.status_code}: {res.text}"
+            print(error_message)
+            return ""  # return empty so UI shows fallback
+    except Exception as e:
+        print(f"AI feedback request failed: {e}")
+        return ""
 
 def generate_training_plan(features, goal):
     """Create a weekly training plan based on biomechanical features and a training goal."""
