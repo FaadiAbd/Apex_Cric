@@ -236,3 +236,119 @@ Video Processing Pipeline Design
 ⚠ Disclaimer
 
 This tool provides AI-generated feedback and should not replace professional coaching. Results depend on video quality and camera angle.
+Steps to Run the ApexCric Project (Windows)
+1. Extract the Project
+
+Download and extract the project ZIP file.
+Open the extracted folder in VS Code or Command Prompt.
+
+Your project folder structure will look like this:
+
+APEX_CRIC-SUB/
+│
+├── models/
+├── static/
+├── templates/
+├── uploads/
+├── venv/
+│
+├── .env
+├── .gitignore
+├── apex_cric.db
+├── Complete front End.html
+├── Complete_Backend.py
+├── Complete_Project.py
+├── LICENSE
+├── README.md
+├── requirements.txt
+
+Open Command Prompt and navigate to the project folder:
+
+cd APEX_CRIC-SUB
+2. Create a Virtual Environment (If not already created)
+
+If the venv folder already exists, you can skip this step.
+
+Otherwise create a virtual environment:
+
+python -m venv venv
+3. Activate the Virtual Environment
+
+Activate the environment using:
+
+venv\Scripts\activate
+
+After activation, the terminal should show:
+
+(venv)
+
+before the command prompt.
+
+4. Install Project Dependencies
+
+Install all required libraries using the requirements file:
+
+pip install -r requirements.txt
+
+This installs libraries such as:
+
+Flask
+OpenCV
+NumPy
+MediaPipe
+Requests
+Python-dotenv
+ReportLab
+QRCode
+Pillow
+5. Configure Environment Variables
+
+Ensure the .env file contains the required API keys:
+
+OPENROUTER_API_KEY=your_openrouter_api_key
+MODEL_ID=deepseek/deepseek-chat
+SECRET_KEY=your_secret_key
+
+These variables are required for the AI feedback and training plan generation.
+
+6. Database Setup
+
+The project uses SQLite.
+
+The database file:
+
+apex_cric.db
+
+is automatically created and managed by the application.
+No manual database configuration is required.
+
+7. Run the Application
+
+Start the backend server by running:
+
+python Complete_Project.py
+
+The terminal should display something similar to:
+
+Running on http://127.0.0.1:5001
+8. Open the Application
+
+Open your browser and go to:
+
+http://localhost:5001
+
+You will see the ApexCric login page.
+
+9. First-Time Model Download
+
+When the analysis feature is used for the first time, the system automatically downloads the MediaPipe Pose Landmarker model and stores it in the models folder.
+
+This process happens automatically and requires an internet connection.
+
+10. Using the System
+Create a user account.
+Log in to the dashboard.
+Upload a bowling video.
+The system processes the video using pose detection.
+AI generates feedback, training plans, and tactical advice.
+Results can be viewed, downloaded, or shared.
